@@ -3,6 +3,8 @@
 //! Kept separate from `qr`/`oauth`: those are two ways *in*, this is the way
 //! *out*. Re-exported from the parent module like the others.
 
+use tauri::Manager;
+
 use crate::commands::AppStateHandle;
 
 /// Sign the user out of Steam.
