@@ -151,7 +151,17 @@ function AccountCard({ onOpenParser }: { onOpenParser: () => void }) {
         // Real sign-out: clears the Steam cookies, the in-memory jar and the
         // saved OAuth session. `steam_login_prepare` only navigates to the
         // login page and deliberately keeps the session, so it was a no-op here.
-        const res = await tryInvokeAction("steam_sign_out");
+        //
+        // Raced with a timeout: if the backend ever stalls (a lock held by a
+        // bug, a hung webview call) the button would otherwise spin forever and
+        // force a restart. 15s is far longer than a healthy sign-out (sub-second),
+        // so this only fires when something is genuinely stuck.
+        const res = await Promise.race([
+          tryInvokeAction("steam_sign_out"),
+          new Promise<{ ok: false; error: string }>((resolve) =>
+            setTimeout(() => resolve({ ok: false, error: "timeout" }), 15000),
+          ),
+        ]);
         if (!res.ok) {
           pushToast(
             `${t("messages.error") || "Could not sign out"}: ${res.error}`,

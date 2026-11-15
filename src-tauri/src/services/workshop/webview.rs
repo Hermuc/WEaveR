@@ -73,6 +73,16 @@ pub struct SteamWebview {
     app: AppHandle,
     data_dir: PathBuf,
     jar: Arc<Jar>,
+    /// Serialises webview access. **NOT reentrant** (`tokio::sync::Mutex`).
+    ///
+    /// While holding this lock a method may only call helpers that do NOT take
+    /// it — `logout_locked`, `goto_login_form`, `is_logged_in_inner`,
+    /// `wait_for_login`, `window_exists`, `install_cookies_for_window`.
+    /// Methods that DO take it — `ensure_profile_loaded`, `sync_cookies`,
+    /// `sign_out`, `is_logged_in`, `auto_login`, `login_fill` — must be called
+    /// only before acquiring it, or after releasing it. Calling one of those
+    /// while holding the lock deadlocks the entire webview (this happened once
+    /// in `sign_out`; see its comment).
     lock: Mutex<()>,
     /// One-shot guard for `ensure_community_session`. See that method for why
     /// repeating the attempt is actively harmful.

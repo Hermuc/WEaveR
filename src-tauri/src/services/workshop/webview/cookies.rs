@@ -138,12 +138,20 @@ impl SteamWebview {
     /// that is the caller's job, because otherwise the next launch would rebuild
     /// the cookies from the saved access token and silently sign back in.
     pub async fn sign_out(&self) -> Result<usize, String> {
+        // Ensure the window exists BEFORE taking the lock.
+        //
+        // `ensure_profile_loaded` takes `self.lock` itself, and `self.lock` is a
+        // `tokio::sync::Mutex` — not reentrant — so calling it while already
+        // holding the lock deadlocks the whole webview (every later
+        // `sync_cookies`/`is_logged_in` then queues behind it forever).
+        // `window_exists()` does not take the lock, so this check is safe here.
+        if !self.window_exists() {
+            let _ = self.ensure_profile_loaded().await;
+        }
+
         let _g = self.lock.lock().await;
-        // The cookie list is only readable once the window exists. Create it
-        // first, exactly as `init_cookies` does at startup.
-        let _ = self.ensure_profile_loaded().await;
         let Some(w) = self.app.get_webview_window(LABEL) else {
-            return Err("webview window unavailable".into());
+            return Err("NO_WEBVIEW_WINDOW".to_string());
         };
 
         let mut removed = 0usize;
