@@ -180,6 +180,30 @@ impl SteamWebview {
             }
         }
 
+        // Verify the delete actually took effect.
+        //
+        // `delete_cookie` returning Ok only means the request was accepted; on
+        // some WebView2 builds an HttpOnly cookie survives it. Reporting success
+        // while `steamLoginSecure` is still there is exactly how the UI ended up
+        // claiming "signed out" while browsing stayed authenticated — so read the
+        // cookies back and only fall back to the blunt clear when they remain.
+        let still: Vec<String> = w
+            .cookies()
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .filter(|c| is_steam_domain(c.domain().unwrap_or_default()))
+            .map(|c| c.name().to_string())
+            .collect();
+        if !still.is_empty() {
+            log::warn!(
+                "[steam-signout] {} Steam cookies survived delete_cookie: {:?}; clearing browsing data",
+                still.len(),
+                still
+            );
+            w.clear_all_browsing_data().map_err(|e| e.to_string())?;
+            removed += still.len();
+        }
+
         log::info!("[steam-signout] deleted {removed} Steam cookies from the webview");
         Ok(removed)
     }

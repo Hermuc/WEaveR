@@ -58,6 +58,7 @@ function AccountCard({ onOpenParser }: { onOpenParser: () => void }) {
   const sessionPhase = useSteamSessionStore((s) => s.phase);
   const account = useSteamSessionStore((s) => s.account);
   const setSessionLoggedIn = useSteamSessionStore((s) => s.setLoggedIn);
+  const setSessionSignedOut = useSteamSessionStore((s) => s.setSignedOut);
 
   const [busy, setBusy] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
@@ -65,18 +66,24 @@ function AccountCard({ onOpenParser }: { onOpenParser: () => void }) {
   const refreshSession = useCallback(async () => {
     if (!inTauri) return;
 
-    const v = await tryInvoke<boolean>("steam_is_logged_in", undefined, false);
-    if (!v) {
-      setSessionLoggedIn(null);
-      return;
+    // One authoritative, three-state probe — the same one the startup path and
+    // the login dialog use. `steam_is_logged_in` only reads the WebView2 cookie
+    // and `steam_current_account` asks Steam; using them here meant this card
+    // could disagree with the sidebar ("logged in" vs the real anonymous
+    // session, or the reverse). A single probe keeps every surface consistent.
+    const probe = await tryInvoke<{
+      state: string;
+      account?: SteamAccountInfo;
+    }>("steam_probe_account", undefined, { state: "unknown" });
+
+    if (probe?.state === "signed_in" && probe.account) {
+      setSessionLoggedIn(probe.account);
+    } else if (probe?.state === "signed_out") {
+      // Neutral, not an error: nothing failed, the user is just anonymous.
+      setSessionSignedOut();
     }
-    const info = await tryInvoke<SteamAccountInfo | null>(
-      "steam_current_account",
-      undefined,
-      null,
-    );
-    setSessionLoggedIn(info ?? null);
-  }, [setSessionLoggedIn]);
+    // `unknown`: leave the current badge alone rather than claiming a sign-out.
+  }, [setSessionLoggedIn, setSessionSignedOut]);
 
   const refreshAccounts = useCallback(async () => {
     if (!inTauri) return;
@@ -170,7 +177,8 @@ function AccountCard({ onOpenParser }: { onOpenParser: () => void }) {
           return;
         }
         // Clear the badge immediately; the probe below confirms it.
-        setSessionLoggedIn(null);
+        // Signed out is neutral — `setLoggedIn(null)` would paint it as an error.
+        setSessionSignedOut();
         pushToast(t("settings.signed_out") || "Signed out of Steam", "success");
         await refreshSession();
         triggerGlobalRefresh();

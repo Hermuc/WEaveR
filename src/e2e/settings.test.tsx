@@ -120,18 +120,28 @@ describe("Settings Dialog E2E Tests (F3)", () => {
   it("T1.3.3 should listen to steam-login-success event and update login status", async () => {
     let syncCookiesCalled = false;
     let isLoggedIn = false;
-    registerCommandMock("steam_is_logged_in", () => isLoggedIn);
+    // The account card now uses the single three-state probe (matching the
+    // sidebar and the login dialog) instead of steam_is_logged_in +
+    // steam_current_account, so that is what we have to mock here.
     registerCommandMock("steam_sync_cookies", () => {
       syncCookiesCalled = true;
       isLoggedIn = true;
       return 1;
     });
-    registerCommandMock("steam_current_account", () => ({
-      persona_name: "SteamGamer",
-      account_name: "steam_gamer",
-      steamid: "76561198000000000",
-      profile_url: "https://steamcommunity.com/id/steam_gamer",
-    }));
+    registerCommandMock("steam_probe_account", () =>
+      isLoggedIn
+        ? {
+            state: "signed_in",
+            account: {
+              persona_name: "SteamGamer",
+              account_name: "steam_gamer",
+              steamid: "76561198000000000",
+              profile_url: "https://steamcommunity.com/id/steam_gamer",
+              avatar_url: "",
+            },
+          }
+        : { state: "signed_out" },
+    );
 
     render(<SettingsDialog open={true} onOpenChange={() => {}} />);
 

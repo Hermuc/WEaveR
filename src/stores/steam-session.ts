@@ -37,7 +37,13 @@ interface SteamSessionStore {
   account: SteamAccountInfo | null;
   setPhase: (phase: SteamSessionPhase) => void;
   setLoggingIn: () => void;
-  setLoggedIn: (account: SteamAccountInfo | null) => void;
+  /// Mark the session as signed in.
+  ///
+  /// Takes a NON-null account: "signed out" has its own action (`setSignedOut`).
+  /// This used to accept `null` and map it to the `error` phase, which is how
+  /// "signed out" ended up rendered as the red "login failed" badge. The stricter
+  /// signature makes that mistake a compile error instead of a UI bug.
+  setLoggedIn: (account: SteamAccountInfo) => void;
   setError: () => void;
   /// No account signed in, but nothing failed.
   setSignedOut: () => void;
@@ -50,11 +56,7 @@ export const useSteamSessionStore = create<SteamSessionStore>((set) => ({
   account: null,
   setPhase: (phase) => set({ phase }),
   setLoggingIn: () => set({ phase: "logging-in" }),
-  setLoggedIn: (account) =>
-    set({
-      phase: account ? "logged-in" : "error",
-      account: account ?? null,
-    }),
+  setLoggedIn: (account) => set({ phase: "logged-in", account }),
   setError: () => set({ phase: "error", account: null }),
   setSignedOut: () => set({ phase: "signed-out", account: null }),
   setUnknownOrKeep: () =>

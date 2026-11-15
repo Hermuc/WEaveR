@@ -48,6 +48,7 @@ export default function LoginModal({
   const loginModalMode = useAppStore((s) => s.loginModalMode);
   const setAccounts = useAppStore((s) => s.setAccounts);
   const setSessionLoggedIn = useSteamSessionStore((s) => s.setLoggedIn);
+  const setSessionSignedOut = useSteamSessionStore((s) => s.setSignedOut);
 
   const [prevOpen, setPrevOpen] = useState(open);
   if (open !== prevOpen) {
@@ -110,13 +111,15 @@ export default function LoginModal({
       account?: SteamAccountInfo;
     }>("steam_probe_account", undefined, { state: "unknown" });
 
-    if (probe?.state === "signed_in") {
-      setSessionLoggedIn(probe.account ?? null);
+    if (probe?.state === "signed_in" && probe.account) {
+      setSessionLoggedIn(probe.account);
     } else if (probe?.state === "signed_out") {
-      setSessionLoggedIn(null);
+      // Signed out is a neutral state, NOT an error: `setLoggedIn(null)` used to
+      // map to the red "login failed" badge even though nothing had failed.
+      setSessionSignedOut();
     }
     // `unknown`: keep whatever the sidebar already shows.
-  }, [setSessionLoggedIn]);
+  }, [setSessionLoggedIn, setSessionSignedOut]);
 
   const finalizeLogin = useCallback(async () => {
     if (finalizedRef.current) return;

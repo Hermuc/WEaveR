@@ -186,6 +186,11 @@ vi.mock("@tauri-apps/api/core", async () => {
       }
       if (cmd === "config_get") return true;
       if (cmd === "we_list_installed") return [];
+      // Default session probe: anonymous. Without this the call resolves to
+      // `null`, which the UI treats as "unknown" and leaves the badge in `idle`
+      // (nothing rendered). Tests that care about a signed-in session override
+      // it with `registerCommandMock("steam_probe_account", ...)`.
+      if (cmd === "steam_probe_account") return { state: "signed_out" };
       return null;
     }),
     convertFileSrc: vi
