@@ -138,13 +138,10 @@ impl SteamWebview {
     /// that is the caller's job, because otherwise the next launch would rebuild
     /// the cookies from the saved access token and silently sign back in.
     pub async fn sign_out(&self) -> Result<usize, String> {
-        // Ensure the window exists BEFORE taking the lock.
-        //
-        // `ensure_profile_loaded` takes `self.lock` itself, and `self.lock` is a
-        // `tokio::sync::Mutex` — not reentrant — so calling it while already
-        // holding the lock deadlocks the whole webview (every later
-        // `sync_cookies`/`is_logged_in` then queues behind it forever).
-        // `window_exists()` does not take the lock, so this check is safe here.
+        // The window must exist before we can read its cookie list. This has to
+        // happen BEFORE taking `self.lock`: `ensure_profile_loaded` takes the
+        // same (non-reentrant tokio) mutex, so calling it while holding the
+        // lock deadlocks the whole webview. `window_exists()` does not lock.
         if !self.window_exists() {
             let _ = self.ensure_profile_loaded().await;
         }
@@ -154,6 +151,17 @@ impl SteamWebview {
             return Err("NO_WEBVIEW_WINDOW".to_string());
         };
 
+        let mut removed = Self::delete_steam_cookies(&w)?;
+        Self::expire_jar_cookies(&self.jar);
+        removed += Self::purge_surviving_cookies(&w)?;
+
+        log::info!("[steam-signout] deleted {removed} Steam cookies from the webview");
+        Ok(removed)
+    }
+
+    /// Delete every Steam-domain cookie via the precise per-cookie API.
+    /// Caller holds `self.lock`.
+    fn delete_steam_cookies(w: &tauri::WebviewWindow) -> Result<usize, String> {
         let mut removed = 0usize;
         for cookie in w.cookies().map_err(|e| e.to_string())? {
             let domain = cookie.domain().unwrap_or_default().to_string();
@@ -162,31 +170,37 @@ impl SteamWebview {
                 removed += 1;
             }
         }
+        Ok(removed)
+    }
 
-        // reqwest::Jar exposes no clear() in 0.13, so expire the entries instead:
-        // a `Max-Age=0` cookie that matches an existing one marks it expired, and
-        // the jar filters expired cookies out of every request.
+    /// Expire the session cookies in the reqwest jar.
+    ///
+    /// reqwest 0.13 `Jar` has no `clear()`; a `Max-Age=0` cookie matching an
+    /// existing one marks it expired and the jar filters it from requests.
+    /// NOTE: this relies on cookie_store semantics — re-verify after upgrading
+    /// reqwest/cookie_store to a new major version.
+    fn expire_jar_cookies(jar: &reqwest::cookie::Jar) {
         for (host, domain_attr) in [
             ("https://steamcommunity.com", ".steamcommunity.com"),
             ("https://store.steampowered.com", ".steampowered.com"),
         ] {
             if let Ok(url) = host.parse::<url::Url>() {
                 for name in STEAM_COOKIE_NAMES {
-                    self.jar.add_cookie_str(
+                    jar.add_cookie_str(
                         &format!("{name}=; Domain={domain_attr}; Path=/; Max-Age=0"),
                         &url,
                     );
                 }
             }
         }
+    }
 
-        // Verify the delete actually took effect.
-        //
-        // `delete_cookie` returning Ok only means the request was accepted; on
-        // some WebView2 builds an HttpOnly cookie survives it. Reporting success
-        // while `steamLoginSecure` is still there is exactly how the UI ended up
-        // claiming "signed out" while browsing stayed authenticated — so read the
-        // cookies back and only fall back to the blunt clear when they remain.
+    /// Re-read the cookie jar and, if Steam cookies survived `delete_cookie`,
+    /// fall back to clearing all browsing data. `delete_cookie` returning Ok
+    /// only means the request was accepted; on some WebView2 builds an HttpOnly
+    /// cookie survives it, which is how the UI once claimed "signed out" while
+    /// browsing stayed authenticated. Caller holds `self.lock`.
+    fn purge_surviving_cookies(w: &tauri::WebviewWindow) -> Result<usize, String> {
         let still: Vec<String> = w
             .cookies()
             .map_err(|e| e.to_string())?
@@ -194,18 +208,16 @@ impl SteamWebview {
             .filter(|c| is_steam_domain(c.domain().unwrap_or_default()))
             .map(|c| c.name().to_string())
             .collect();
-        if !still.is_empty() {
-            log::warn!(
-                "[steam-signout] {} Steam cookies survived delete_cookie: {:?}; clearing browsing data",
-                still.len(),
-                still
-            );
-            w.clear_all_browsing_data().map_err(|e| e.to_string())?;
-            removed += still.len();
+        if still.is_empty() {
+            return Ok(0);
         }
-
-        log::info!("[steam-signout] deleted {removed} Steam cookies from the webview");
-        Ok(removed)
+        log::warn!(
+            "[steam-signout] {} Steam cookies survived delete_cookie: {:?}; clearing browsing data",
+            still.len(),
+            still
+        );
+        w.clear_all_browsing_data().map_err(|e| e.to_string())?;
+        Ok(still.len())
     }
 }
 

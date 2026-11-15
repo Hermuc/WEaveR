@@ -243,9 +243,11 @@ mod tests {
     #[test]
     fn auto_login_defaults_to_true() {
         // "Stay signed in" is the shipped default; only an explicit sign-out
-        // flips it to false.
+        // flips it to false. Resolve through the SHARED constant so a typo in
+        // either the default JSON or the constant fails here instead of
+        // silently disabling auto-login at runtime.
         let defaults = default_settings();
-        let value = resolve_value(&defaults, "account.auto_login");
+        let value = resolve_value(&defaults, crate::config::KEY_ACCOUNT_AUTO_LOGIN);
         assert_eq!(value, Some(&Value::Bool(true)));
     }
 
@@ -255,17 +257,11 @@ mod tests {
             path: std::env::temp_dir().join("weave_auto_login_test.json"),
             data: Mutex::new(default_settings()),
         };
-        service
-            .set("account.auto_login", Value::Bool(false))
-            .expect("set should succeed");
-        assert_eq!(
-            service.get("account.auto_login"),
-            Some(Value::Bool(false))
-        );
+        let key = crate::config::KEY_ACCOUNT_AUTO_LOGIN;
+        service.set(key, Value::Bool(false)).expect("set should succeed");
+        assert_eq!(service.get(key), Some(Value::Bool(false)));
         // And it flips back on a successful sign-in.
-        service
-            .set("account.auto_login", Value::Bool(true))
-            .expect("set should succeed");
-        assert_eq!(service.get("account.auto_login"), Some(Value::Bool(true)));
+        service.set(key, Value::Bool(true)).expect("set should succeed");
+        assert_eq!(service.get(key), Some(Value::Bool(true)));
     }
 }

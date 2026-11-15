@@ -37,7 +37,10 @@ pub async fn steam_sign_out(state: AppStateHandle<'_>) -> Result<(), String> {
     if let Err(e) = state
         .settings
         .read()
-        .set("account.auto_login", serde_json::Value::Bool(false))
+        .set(
+            crate::config::KEY_ACCOUNT_AUTO_LOGIN,
+            serde_json::Value::Bool(false),
+        )
     {
         log::warn!("[steam-signout] could not persist auto_login=false: {e}");
     }

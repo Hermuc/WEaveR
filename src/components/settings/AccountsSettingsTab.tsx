@@ -5,6 +5,7 @@ import { listen } from "@tauri-apps/api/event";
 import { EVENTS } from "@/lib/events";
 
 import { inTauri, invoke, tryInvoke, tryInvokeAction } from "@/lib/tauri";
+import { withTimeout } from "@/lib/async";
 import { pushToast } from "@/stores/toasts";
 import { useAppStore } from "@/stores/app";
 import { useConfirm } from "@/hooks/useConfirm";
@@ -12,6 +13,11 @@ import { useSteamSessionStore, SteamAccountInfo } from "@/stores/steam-session";
 import { triggerGlobalRefresh } from "@/stores/refresh";
 
 import DownloadLoginModal from "@/components/dialogs/DownloadLoginModal";
+
+/// A healthy sign-out is sub-second; this only fires when the backend is
+/// genuinely stuck (held webview lock, hung Steam request) so the button can
+/// never spin forever again.
+const SIGN_OUT_TIMEOUT_MS = 15_000;
 
 const persist = async (path: string, value: unknown) => {
   if (!inTauri) return;
@@ -23,9 +29,14 @@ const persist = async (path: string, value: unknown) => {
  *
  * One account signs in for browsing and is used for downloads, so this renders
  * exactly one card with exactly one action: sign in when signed out, sign out
- * when signed in. There is no separate "add account" step and no second relogin
- * control -- the saved credential and the live session are the same thing from
- * the user's point of view.
+ * when signed in.
+ *
+ * NOTE: "saved credential" and "live session" are NOT the same thing.
+ * `DownloadLoginModal` only *verifies* the credential via DepotDownloader;
+ * the backend then has to build the browsing session separately. The other
+ * entry point (`LoginModal`, OAuth/QR) establishes the webview session
+ * first and only then saves. Two different callers, two different flows —
+ * keep this distinction in mind before removing any "redundant" step.
  */
 export default function AccountsSettingsTab({
   onOpenParser,
@@ -163,12 +174,11 @@ function AccountCard({ onOpenParser }: { onOpenParser: () => void }) {
         // bug, a hung webview call) the button would otherwise spin forever and
         // force a restart. 15s is far longer than a healthy sign-out (sub-second),
         // so this only fires when something is genuinely stuck.
-        const res = await Promise.race([
+        const res = await withTimeout(
           tryInvokeAction("steam_sign_out"),
-          new Promise<{ ok: false; error: string }>((resolve) =>
-            setTimeout(() => resolve({ ok: false, error: "timeout" }), 15000),
-          ),
-        ]);
+          SIGN_OUT_TIMEOUT_MS,
+          { ok: false as const, error: "timeout" },
+        );
         if (!res.ok) {
           pushToast(
             `${t("messages.error") || "Could not sign out"}: ${res.error}`,
@@ -176,10 +186,9 @@ function AccountCard({ onOpenParser }: { onOpenParser: () => void }) {
           );
           return;
         }
-        // Belt-and-braces: the backend already persisted this, but writing it
-        // here too means the "don't auto-login" intent survives even if a
-        // platform-specific backend branch failed.
-        await persist("account.auto_login", false);
+        // The backend owns `account.auto_login`; do NOT write it here too.
+        // Two writers for one value is exactly the kind of drift that made
+        // "signed out" come back as "signed in" on the next launch.
         // Clear the badge immediately; the probe below confirms it.
         // Signed out is neutral — `setLoggedIn(null)` would paint it as an error.
         setSessionSignedOut();

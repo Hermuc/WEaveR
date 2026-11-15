@@ -77,9 +77,14 @@ pub async fn steam_current_account(
 /// on success. Safe to call repeatedly — no-ops if already logged in. When
 /// `force` is true the current session is terminated first and a fresh login
 /// is always attempted.
-#[tauri::command]
-pub async fn steam_auto_login(
-    state: AppStateHandle<'_>,
+/// Sign in using the credentials already stored for the given account.
+///
+/// This is the shared *service-level* entry point. Both the `steam_auto_login`
+/// command and `accounts_set_custom` (when it needs to establish a browsing
+/// session) go through here, so a command never has to call another
+/// `#[tauri::command]` as an internal API.
+pub(crate) async fn sign_in_with_saved_credentials(
+    state: &AppStateHandle<'_>,
     account_index: Option<usize>,
     force: Option<bool>,
 ) -> Result<bool, String> {
@@ -135,9 +140,19 @@ pub async fn steam_auto_login(
         state.workshop.clear_caches();
         // A sign-in means "keep me signed in" again — re-enable auto-login that
         // a previous sign-out had turned off.
-        super::mark_signed_in(&state);
+        super::mark_signed_in(state);
     }
     Ok(ok)
+}
+
+/// Command wrapper: sign in with the first saved account (or `account_index`).
+#[tauri::command]
+pub async fn steam_auto_login(
+    state: AppStateHandle<'_>,
+    account_index: Option<usize>,
+    force: Option<bool>,
+) -> Result<bool, String> {
+    sign_in_with_saved_credentials(&state, account_index, force).await
 }
 
 #[tauri::command]

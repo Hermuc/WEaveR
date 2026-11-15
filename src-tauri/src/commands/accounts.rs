@@ -72,8 +72,14 @@ pub async fn accounts_set_custom(
         // out right after they approved the mobile prompt and recreate the old
         // endless sign-in/confirm loop. `auto_login` is a no-op when a session
         // already exists and never wipes the profile.
-        if let Err(e) =
-            crate::commands::steam::steam_auto_login(state, None, Some(false)).await
+        // Service-level entry, not another #[tauri::command]: keeps the
+        // command layer thin and the layering one-directional.
+        if let Err(e) = crate::commands::steam::sign_in_with_saved_credentials(
+            &state,
+            None,
+            Some(false),
+        )
+        .await
         {
             // The credential is saved regardless; only the live session failed.
             log::warn!("[accounts] could not establish session for {user}: {e}");

@@ -19,6 +19,7 @@ import {
 import { maybeMinimize } from "@/lib/window";
 import type { UpdateInfo } from "@/types/updater";
 import { EVENTS } from "@/lib/events";
+import { CONFIG_KEYS, shouldAttemptAutoLogin } from "@/lib/config-keys";
 
 export function useBootstrap() {
   const dotnetInitialized = useRef(false);
@@ -415,12 +416,12 @@ async function syncSteamSession() {
     //    `account.auto_login = false`; without this check the startup flow would
     //    sign straight back in with the saved password, which is exactly how a
     //    "signed out" app came back authenticated on the next launch.
-    const autoLogin = await tryInvoke<boolean>(
+    const autoLoginPref = await tryInvoke<unknown>(
       "config_get",
-      { path: "account.auto_login" },
+      { path: CONFIG_KEYS.ACCOUNT_AUTO_LOGIN },
       true,
     );
-    if (autoLogin === false) {
+    if (!shouldAttemptAutoLogin(autoLoginPref)) {
       session.setSignedOut();
       clearTimeout(settleTimer);
       return;
