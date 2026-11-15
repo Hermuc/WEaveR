@@ -176,6 +176,10 @@ function AccountCard({ onOpenParser }: { onOpenParser: () => void }) {
           );
           return;
         }
+        // Belt-and-braces: the backend already persisted this, but writing it
+        // here too means the "don't auto-login" intent survives even if a
+        // platform-specific backend branch failed.
+        await persist("account.auto_login", false);
         // Clear the badge immediately; the probe below confirms it.
         // Signed out is neutral — `setLoggedIn(null)` would paint it as an error.
         setSessionSignedOut();

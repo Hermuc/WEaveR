@@ -74,6 +74,7 @@ async fn complete_oauth_login(
     tokio::time::sleep(OAUTH_COOKIE_SETTLE).await;
     let _ = state.steam_webview.sync_cookies().await;
     state.workshop.clear_caches();
+    super::mark_signed_in(state);
     let _ = state.app_handle.emit("steam-login-success", ());
 
     // `finish()` sends the CM logon; do it last and ignore failure (the web

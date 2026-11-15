@@ -133,6 +133,9 @@ pub async fn steam_auto_login(
     if ok {
         let _ = state.steam_webview.sync_cookies().await;
         state.workshop.clear_caches();
+        // A sign-in means "keep me signed in" again — re-enable auto-login that
+        // a previous sign-out had turned off.
+        super::mark_signed_in(&state);
     }
     Ok(ok)
 }
@@ -287,6 +290,7 @@ pub async fn steam_qr_login_finalize(
         }
     }
 
+    super::mark_signed_in(&state);
     let _ = state.app_handle.emit("steam-login-success", ());
 
     Ok(())

@@ -182,7 +182,12 @@ fn default_settings() -> Value {
             "account": {
                 "account_number": 0,
                 "infinite_retry_accounts": false
-            }
+            },
+            // Whether the startup flow may sign in with the saved credentials.
+            // Set to `false` by an explicit sign-out so the next launch does not
+            // immediately log the user back in; restored to `true` by any
+            // successful sign-in. Defaults to `true` to preserve "stay signed in".
+            "auto_login": true
         },
         "general": {
             "appearance": {
@@ -233,5 +238,34 @@ mod tests {
         // A path that itself starts with "settings." after the first strip keeps
         // the second occurrence.
         assert_eq!(normalize_settings_path("settings.settings.x"), "settings.x");
+    }
+
+    #[test]
+    fn auto_login_defaults_to_true() {
+        // "Stay signed in" is the shipped default; only an explicit sign-out
+        // flips it to false.
+        let defaults = default_settings();
+        let value = resolve_value(&defaults, "account.auto_login");
+        assert_eq!(value, Some(&Value::Bool(true)));
+    }
+
+    #[test]
+    fn signout_flag_can_be_set_and_read_back() {
+        let service = SettingsService {
+            path: std::env::temp_dir().join("weave_auto_login_test.json"),
+            data: Mutex::new(default_settings()),
+        };
+        service
+            .set("account.auto_login", Value::Bool(false))
+            .expect("set should succeed");
+        assert_eq!(
+            service.get("account.auto_login"),
+            Some(Value::Bool(false))
+        );
+        // And it flips back on a successful sign-in.
+        service
+            .set("account.auto_login", Value::Bool(true))
+            .expect("set should succeed");
+        assert_eq!(service.get("account.auto_login"), Some(Value::Bool(true)));
     }
 }

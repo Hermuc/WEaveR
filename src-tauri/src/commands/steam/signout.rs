@@ -29,6 +29,19 @@ pub async fn steam_sign_out(state: AppStateHandle<'_>) -> Result<(), String> {
     }
 
     state.workshop.clear_caches();
-    log::info!("[steam-signout] removed {removed} Steam cookies; cleared stored session");
+
+    // Remember that the user *chose* to sign out. Without this the startup
+    // flow would sign straight back in with the saved password on the next
+    // launch, which is exactly how a "signed out" app came back authenticated.
+    // Any successful sign-in flips this back to `true`.
+    if let Err(e) = state
+        .settings
+        .read()
+        .set("account.auto_login", serde_json::Value::Bool(false))
+    {
+        log::warn!("[steam-signout] could not persist auto_login=false: {e}");
+    }
+
+    log::info!("[steam-signout] removed {removed} Steam cookies; cleared stored session; disabled auto-login");
     Ok(())
 }

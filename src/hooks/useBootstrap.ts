@@ -410,7 +410,22 @@ async function syncSteamSession() {
       }
     }
 
-    // 3. Fall back to the stored credentials (may hit Steam Guard).
+    // 3. Fall back to the stored credentials (may hit Steam Guard) — but ONLY if
+    //    the user has not signed out. An explicit sign-out sets
+    //    `account.auto_login = false`; without this check the startup flow would
+    //    sign straight back in with the saved password, which is exactly how a
+    //    "signed out" app came back authenticated on the next launch.
+    const autoLogin = await tryInvoke<boolean>(
+      "config_get",
+      { path: "account.auto_login" },
+      true,
+    );
+    if (autoLogin === false) {
+      session.setSignedOut();
+      clearTimeout(settleTimer);
+      return;
+    }
+
     let ok = await tryInvoke<boolean>(
       "steam_auto_login",
       { accountIndex: null },
