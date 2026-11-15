@@ -162,37 +162,18 @@ describe("Settings Dialog E2E Tests (F3)", () => {
     expect(await screen.findByText("SteamGamer")).toBeInTheDocument();
   });
 
-  it("T1.3.4 should add custom download account successfully", async () => {
-    let setCustomCalled = false;
-    registerCommandMock("accounts_set_custom", ({ username, password }: any) => {
-      if (username === "user123" && password === "pass123") {
-        setCustomCalled = true;
-        return true;
-      }
-      return false;
-    });
-    registerCommandMock("accounts_verify_custom", ({ username }: any) => {
-      emitTauriEvent("auth://success", username);
-    });
-
+  it("T1.3.4 sign-in opens the single global OAuth/QR login dialog", async () => {
+    // The account card no longer has its own DepotDownloader modal: it
+    // opens the same global LoginModal as the rest of the app. That is
+    // what fixed the "spinner forever" hang at Steam Guard.
     render(<SettingsDialog open={true} onOpenChange={() => {}} />);
-
     const accountTab = await screen.findByRole("tab", { name: /account/i });
     await userEvent.click(accountTab);
-
-    const addCustomBtn = await screen.findByRole("button", { name: /sign in with steam/i });
-    await userEvent.click(addCustomBtn);
-
-    const usernameInput = await screen.findByLabelText(/username/i);
-    const passwordInput = screen.getByLabelText(/password/i);
-    await userEvent.type(usernameInput, "user123");
-    await userEvent.type(passwordInput, "pass123");
-
-    const addBtn = screen.getByRole("button", { name: /^add$/i });
-    await userEvent.click(addBtn);
-
+    const signInBtn = await screen.findByRole("button", { name: /sign in with steam/i });
+    await userEvent.click(signInBtn);
     await waitFor(() => {
-      expect(setCustomCalled).toBe(true);
+      expect(useAppStore.getState().loginModalOpen).toBe(true);
+      expect(useAppStore.getState().loginModalMode).toBe("manual");
     });
   });
 
@@ -246,46 +227,29 @@ describe("Settings Dialog E2E Tests (F3)", () => {
     expect(useAppStore.getState().weDirectory).toBe("C:/MockDirectory");
   });
 
-  it("T2.3.3 should display warning toast when adding duplicate custom account", async () => {
-    registerCommandMock("accounts_set_custom", () => false); // Returns false for duplicate
-    registerCommandMock("accounts_verify_custom", ({ username }: any) => {
-      emitTauriEvent("auth://success", username);
-    });
-
+  it("T2.3.3 sign-in does not open a second, local login dialog", async () => {
     render(<SettingsDialog open={true} onOpenChange={() => {}} />);
-
     const accountTab = await screen.findByRole("tab", { name: /account/i });
     await userEvent.click(accountTab);
-
-    const addCustomBtn = await screen.findByRole("button", { name: /sign in with steam/i });
-    await userEvent.click(addCustomBtn);
-
-    const usernameInput = await screen.findByLabelText(/username/i);
-    const passwordInput = screen.getByLabelText(/password/i);
-    await userEvent.type(usernameInput, "user123");
-    await userEvent.type(passwordInput, "pass123");
-
-    const addBtn = screen.getByRole("button", { name: /^add$/i });
-    await userEvent.click(addBtn);
-
-    // Verify it doesn't clear input or does similar. In duplicate case we get an error toast.
-    expect(usernameInput).toHaveValue("user123");
+    const signInBtn = await screen.findByRole("button", { name: /sign in with steam/i });
+    await userEvent.click(signInBtn);
+    // No local username field: the global LoginModal owns the form.
+    expect(screen.queryByLabelText(/username/i)).toBeNull();
+    await waitFor(() => {
+      expect(useAppStore.getState().loginModalOpen).toBe(true);
+    });
   });
 
-  it("T2.3.4 should highlight inputs and block submit on blank custom account fields", async () => {
+  it("T2.3.4 sign-in button is always available when signed out", async () => {
     render(<SettingsDialog open={true} onOpenChange={() => {}} />);
-
     const accountTab = await screen.findByRole("tab", { name: /account/i });
     await userEvent.click(accountTab);
-
-    const addCustomBtn = await screen.findByRole("button", { name: /sign in with steam/i });
-    await userEvent.click(addCustomBtn);
-
-    const addBtn = await screen.findByRole("button", { name: /^add$/i });
-    await userEvent.click(addBtn);
-
-    // Inputs should still be blank. Verification passes since submission did not occur.
-    expect(screen.getByLabelText(/username/i)).toHaveValue("");
+    const signInBtn = await screen.findByRole("button", { name: /sign in with steam/i });
+    expect(signInBtn).toBeEnabled();
+    await userEvent.click(signInBtn);
+    await waitFor(() => {
+      expect(useAppStore.getState().loginModalOpen).toBe(true);
+    });
   });
 
   it("T2.3.5 should allow rapid tab switching without rendering errors", async () => {

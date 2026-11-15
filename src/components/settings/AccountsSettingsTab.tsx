@@ -12,7 +12,6 @@ import { useConfirm } from "@/hooks/useConfirm";
 import { useSteamSessionStore, SteamAccountInfo } from "@/stores/steam-session";
 import { triggerGlobalRefresh } from "@/stores/refresh";
 
-import DownloadLoginModal from "@/components/dialogs/DownloadLoginModal";
 
 /// A healthy sign-out is sub-second; this only fires when the backend is
 /// genuinely stuck (held webview lock, hung Steam request) so the button can
@@ -31,12 +30,11 @@ const persist = async (path: string, value: unknown) => {
  * exactly one card with exactly one action: sign in when signed out, sign out
  * when signed in.
  *
- * NOTE: "saved credential" and "live session" are NOT the same thing.
- * `DownloadLoginModal` only *verifies* the credential via DepotDownloader;
- * the backend then has to build the browsing session separately. The other
- * entry point (`LoginModal`, OAuth/QR) establishes the webview session
- * first and only then saves. Two different callers, two different flows —
- * keep this distinction in mind before removing any "redundant" step.
+ * Sign-in opens the SAME global `LoginModal` (OAuth / QR) that the startup
+ * flow uses. An earlier version opened `DownloadLoginModal` here, which
+ * only verifies the password via DepotDownloader and then tried to build a
+ * browsing session by filling Steam's web form; that dead-ends at Steam
+ * Guard and leaves the button spinning. One sign-in path, one truth.
  */
 export default function AccountsSettingsTab({
   onOpenParser,
@@ -72,7 +70,7 @@ function AccountCard({ onOpenParser }: { onOpenParser: () => void }) {
   const setSessionSignedOut = useSteamSessionStore((s) => s.setSignedOut);
 
   const [busy, setBusy] = useState(false);
-  const [modalOpen, setModalOpen] = useState(false);
+
 
   const refreshSession = useCallback(async () => {
     if (!inTauri) return;
@@ -201,8 +199,8 @@ function AccountCard({ onOpenParser }: { onOpenParser: () => void }) {
       return;
     }
 
-    // Signed out: the login dialog is the single entry point.
-    setModalOpen(true);
+    // Signed out: the SAME OAuth/QR dialog the app uses everywhere else.
+    useAppStore.getState().setLoginModalOpen(true, "manual");
   };
 
   // Removing the saved credential is a separate, destructive intent.
@@ -310,17 +308,7 @@ function AccountCard({ onOpenParser }: { onOpenParser: () => void }) {
         )}
       </div>
 
-      <DownloadLoginModal
-        open={modalOpen}
-        onOpenChange={setModalOpen}
-        onSuccess={async () => {
-          await refreshAccounts();
-          // The backend now establishes the browsing session on save, so
-          // re-probe immediately: otherwise the card keeps showing
-          // "saved account — not signed in" until the next app start.
-          await refreshSession();
-        }}
-      />
+      {/* Sign-in is the global LoginModal (App.tsx); no local dialog here. */}
       {ConfirmDialog}
     </div>
   );

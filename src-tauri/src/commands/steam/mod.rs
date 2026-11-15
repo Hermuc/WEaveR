@@ -11,9 +11,6 @@ pub use oauth::*;
 pub use qr::*;
 pub use signout::*;
 
-// Explicit re-export: `pub(crate)` items are not reliably carried by a glob
-// `pub use`, and other command modules need this shared service-level entry.
-pub(crate) use qr::sign_in_with_saved_credentials;
 
 /// Re-enable "stay signed in" after a successful sign-in.
 ///

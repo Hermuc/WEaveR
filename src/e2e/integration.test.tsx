@@ -280,16 +280,23 @@ describe("Cross-Feature Combination E2E Tests (Tier 3)", () => {
     });
   });
 
-  it("T3.11 (F3 + F5) Dialog inputs label: settings accounts form input elements link to labels using htmlFor", async () => {
+  it("T3.11 (F3 + F5) Settings sign-in delegates to the global login dialog", async () => {
+    // The account card used to own a DepotDownloader form here. It now opens
+    // the single global LoginModal (OAuth/QR), so the settings page itself
+    // must NOT render a username field - that duplicate form was what hung
+    // at Steam Guard.
+    useAppStore.setState({ loginModalOpen: false, loginModalMode: "manual" });
     render(<SettingsDialog open={true} onOpenChange={() => {}} />);
     const accountTab = await screen.findByRole("tab", { name: /account/i });
     await userEvent.click(accountTab);
 
-    const addCustomBtn = await screen.findByRole("button", { name: /sign in with steam/i });
-    await userEvent.click(addCustomBtn);
+    const signInBtn = await screen.findByRole("button", { name: /sign in with steam/i });
+    await userEvent.click(signInBtn);
 
-    const input = screen.getByLabelText(/username/i);
-    expect(input).toBeInTheDocument();
+    expect(screen.queryByLabelText(/username/i)).toBeNull();
+    await waitFor(() => {
+      expect(useAppStore.getState().loginModalOpen).toBe(true);
+    });
   });
 
   it("T3.12 (F3 + F6) Glow backgrounds: settings modal renders a glowing ambient background pane", async () => {

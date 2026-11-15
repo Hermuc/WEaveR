@@ -42,50 +42,20 @@ pub fn accounts_list(state: AppStateHandle<'_>) -> Vec<AccountSummary> {
 /// Stores the password encrypted via `UserAccountsStore` (PBKDF2 +
 /// AES-256-GCM, machine-bound key).
 ///
-/// By default this is persistence-only. The `sign_in` flag exists because the
-/// two callers need different things:
-///
-/// * `LoginModal` (OAuth / QR) has already established the webview session
-///   before saving, so it passes nothing and this stays side-effect free. That
-///   is what stops the sign-in/confirm/wipe loop (see `login_fill`, which must
-///   NOT be called here).
-/// * `DownloadLoginModal` only *verifies* the credentials via DepotDownloader;
-///   that never touches the browsing webview. It passes `sign_in: true` so the
-///   saved account also becomes a live browsing session — otherwise the card
-///   said "saved, not signed in" while browsing stayed anonymous.
+/// Persistence ONLY: never signs in here. Every caller either already has a
+/// session (OAuth/QR via `LoginModal`) or only wants the download credential
+/// stored (`DownloadLoginModal`). Driving a web-form login from this command
+/// was the cause of two separate bugs: the sign-in/confirm/wipe loop, and
+/// the "spinner forever" hang when Steam Guard blocked the form. See
+/// `login_fill`, which must NOT be called from here.
 #[command]
 pub async fn accounts_set_custom(
     state: AppStateHandle<'_>,
     username: String,
     password: String,
-    sign_in: Option<bool>,
 ) -> Result<(), String> {
     let user = username.trim().to_string();
     state.accounts.add_user_account(&user, password.as_str())?;
-
-    if sign_in.unwrap_or(false) {
-        // Build the browsing session from the credentials we just stored.
-        //
-        // We reuse `steam_auto_login` (force=false) rather than `login_fill`:
-        // `login_fill` begins with `logout_locked()` →
-        // `clear_all_browsing_data()`, which would sign the user straight back
-        // out right after they approved the mobile prompt and recreate the old
-        // endless sign-in/confirm loop. `auto_login` is a no-op when a session
-        // already exists and never wipes the profile.
-        // Service-level entry, not another #[tauri::command]: keeps the
-        // command layer thin and the layering one-directional.
-        if let Err(e) = crate::commands::steam::sign_in_with_saved_credentials(
-            &state,
-            None,
-            Some(false),
-        )
-        .await
-        {
-            // The credential is saved regardless; only the live session failed.
-            log::warn!("[accounts] could not establish session for {user}: {e}");
-        }
-    }
-
     Ok(())
 }
 
