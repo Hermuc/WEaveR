@@ -89,6 +89,10 @@ export default function DownloadLoginModal({
           const ok = await tryInvokeOk("accounts_set_custom", {
             username: usernameRef.current.trim(),
             password: passwordRef.current,
+            // This dialog only *verifies* the credential via DepotDownloader; it
+            // never touches the browsing webview. Ask the backend to also build
+            // the live session, otherwise the card says "saved, not signed in".
+            signIn: true,
           });
           if (ok) {
             pushToast(t("settings.account_added") || "Account added", "success");

@@ -39,33 +39,47 @@ pub fn accounts_list(state: AppStateHandle<'_>) -> Vec<AccountSummary> {
 
 /// Add or update a user account's stored credentials.
 ///
-/// This is a persistence-only command: the password is stored encrypted via
-/// `UserAccountsStore` (PBKDF2 + AES-256-GCM, machine-bound key). It does NOT
-/// perform a sign-in — every caller has already authenticated through its own
-/// path (OAuth for `LoginModal`, DepotDownloader for `DownloadLoginModal`).
-/// Keeping this side-effect free is what stops the sign-in/confirm/wipe loop;
-/// see the note in the function body.
+/// Stores the password encrypted via `UserAccountsStore` (PBKDF2 +
+/// AES-256-GCM, machine-bound key).
+///
+/// By default this is persistence-only. The `sign_in` flag exists because the
+/// two callers need different things:
+///
+/// * `LoginModal` (OAuth / QR) has already established the webview session
+///   before saving, so it passes nothing and this stays side-effect free. That
+///   is what stops the sign-in/confirm/wipe loop (see `login_fill`, which must
+///   NOT be called here).
+/// * `DownloadLoginModal` only *verifies* the credentials via DepotDownloader;
+///   that never touches the browsing webview. It passes `sign_in: true` so the
+///   saved account also becomes a live browsing session — otherwise the card
+///   said "saved, not signed in" while browsing stayed anonymous.
 #[command]
 pub async fn accounts_set_custom(
     state: AppStateHandle<'_>,
     username: String,
     password: String,
+    sign_in: Option<bool>,
 ) -> Result<(), String> {
     let user = username.trim().to_string();
     state.accounts.add_user_account(&user, password.as_str())?;
 
-    // Persist ONLY. Do NOT call `login_fill` here.
-    //
-    // This used to also drive a full web-form login, which was wrong for every
-    // caller: both entry points (`LoginModal` via the OAuth commands,
-    // `DownloadLoginModal` via `accounts_verify_custom`) have *already*
-    // authenticated by the time they save, so signing in again was redundant.
-    // Worse, `login_fill` starts with `logout_locked()`
-    // (`clear_all_browsing_data()`), which wiped the `steamLoginSecure` cookie
-    // the caller had just obtained. The poll loop then saw "signed in", called
-    // back in to save, got logged out again, and Steam re-issued a mobile-app
-    // confirmation — an endless sign-in/confirm/wipe cycle that only stopped
-    // when the user closed the window.
+    if sign_in.unwrap_or(false) {
+        // Build the browsing session from the credentials we just stored.
+        //
+        // We reuse `steam_auto_login` (force=false) rather than `login_fill`:
+        // `login_fill` begins with `logout_locked()` →
+        // `clear_all_browsing_data()`, which would sign the user straight back
+        // out right after they approved the mobile prompt and recreate the old
+        // endless sign-in/confirm loop. `auto_login` is a no-op when a session
+        // already exists and never wipes the profile.
+        if let Err(e) =
+            crate::commands::steam::steam_auto_login(state, None, Some(false)).await
+        {
+            // The credential is saved regardless; only the live session failed.
+            log::warn!("[accounts] could not establish session for {user}: {e}");
+        }
+    }
+
     Ok(())
 }
 
@@ -217,7 +231,10 @@ pub async fn accounts_verify_custom(
 
                 last_activity = Instant::now();
                 let lower = line.to_lowercase();
-                log::debug!("[auth-verify] {}", line);
+                // INFO, not DEBUG: in release builds the level is Info, so a
+                // debug line made the whole DepotDownloader transcript invisible
+                // and left the "spinner forever" bug with no evidence at all.
+                log::info!("[auth-verify] {}", line);
 
                 if lower.contains("authentication failed")
                     || lower.contains("failed to authenticate")

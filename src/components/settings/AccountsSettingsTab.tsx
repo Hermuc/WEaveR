@@ -306,6 +306,9 @@ function AccountCard({ onOpenParser }: { onOpenParser: () => void }) {
         onOpenChange={setModalOpen}
         onSuccess={async () => {
           await refreshAccounts();
+          // The backend now establishes the browsing session on save, so
+          // re-probe immediately: otherwise the card keeps showing
+          // "saved account — not signed in" until the next app start.
           await refreshSession();
         }}
       />
