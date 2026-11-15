@@ -5263,8 +5263,6 @@ dependencies = [
 [[package]]
 name = "steamroom-client"
 version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5e092d8a6cf2af2f1d4b00732cb58ef98172509cd092fecd39155bca759ff2a2"
 dependencies = [
  "base64 0.22.1",
  "bytes",

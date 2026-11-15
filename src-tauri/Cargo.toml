@@ -80,6 +80,18 @@ winreg = "0.55"
 [dev-dependencies]
 tempfile = "3.27.0"
 
+# Local fork of steamroom-client (upstream 0.3.0, the newest release).
+#
+# `CredentialsLogin::begin` checked `needs_code` before
+# `DeviceConfirmation`, so when Steam offered BOTH a code and a mobile-app
+# tap it always prompted for the code. Users approved on the phone anyway
+# (which completes the session server-side), then the submitted code hit
+# `DuplicateRequest` and the sign-in failed. The fork routes those sessions
+# to the mobile challenge instead. Remove this patch once upstream ships
+# the same ordering.
+[patch.crates-io]
+steamroom-client = { path = "vendor/steamroom-client" }
+
 [features]
 custom-protocol = ["tauri/custom-protocol"]
 

@@ -1,0 +1,164 @@
+use std::collections::HashMap;
+use std::path::Path;
+use std::path::PathBuf;
+use steamroom::depot::DepotId;
+use steamroom::depot::DepotKey;
+use steamroom::depot::ManifestId;
+
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct DepotInfo {
+    pub manifest_id: u64,
+    pub depot_key: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub installing: Option<u64>,
+}
+
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct DepotConfig {
+    pub depots: HashMap<u32, DepotInfo>,
+}
+
+/// DepotDownloader's config directory name. We match its casing so an install
+/// is not split across a `.DepotDownloader` (DepotDownloader) and a differently
+/// cased directory on case-sensitive filesystems. We still keep our own
+/// `depot.json` / `manifests/` layout inside it, not DepotDownloader's format.
+const CONFIG_DIR: &str = ".DepotDownloader";
+/// Lowercase name written by older steamroom versions. Read as a fallback so a
+/// prior install is not orphaned. On case-insensitive filesystems this and
+/// [`CONFIG_DIR`] resolve to the same directory, so the distinction only
+/// matters on case-sensitive ones.
+const LEGACY_CONFIG_DIR: &str = ".depotdownloader";
+
+impl DepotConfig {
+    /// Directory to write config into (canonical casing).
+    pub fn config_dir(install_dir: &Path) -> PathBuf {
+        install_dir.join(CONFIG_DIR)
+    }
+
+    /// Directory to read config from: the canonical one, falling back to a
+    /// legacy lowercase directory left by an older steamroom.
+    fn read_config_dir(install_dir: &Path) -> PathBuf {
+        let canonical = install_dir.join(CONFIG_DIR);
+        if canonical.exists() {
+            return canonical;
+        }
+        let legacy = install_dir.join(LEGACY_CONFIG_DIR);
+        if legacy.exists() {
+            return legacy;
+        }
+        canonical
+    }
+
+    pub fn config_path(install_dir: &Path) -> PathBuf {
+        Self::config_dir(install_dir).join("depot.json")
+    }
+
+    fn manifests_dir(install_dir: &Path) -> PathBuf {
+        Self::config_dir(install_dir).join("manifests")
+    }
+
+    pub fn load(install_dir: &Path) -> Self {
+        let path = Self::read_config_dir(install_dir).join("depot.json");
+        std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|data| serde_json::from_str(&data).ok())
+            .unwrap_or_default()
+    }
+
+    pub fn save(&self, install_dir: &Path) -> Result<(), std::io::Error> {
+        let dir = Self::config_dir(install_dir);
+        std::fs::create_dir_all(&dir)?;
+        let json = serde_json::to_string_pretty(self).map_err(std::io::Error::other)?;
+        std::fs::write(Self::config_path(install_dir), json)
+    }
+
+    pub fn is_installing(&self, depot_id: DepotId) -> Option<ManifestId> {
+        self.depots
+            .get(&depot_id.0)
+            .and_then(|info| info.installing.map(ManifestId))
+    }
+
+    pub fn get_installed(&self, depot_id: DepotId) -> Option<(ManifestId, DepotKey)> {
+        let info = self.depots.get(&depot_id.0)?;
+        let key_bytes = steamroom::util::hex::decode(&info.depot_key)?;
+        if key_bytes.len() != 32 {
+            return None;
+        }
+        let mut key = [0u8; 32];
+        key.copy_from_slice(&key_bytes);
+        Some((ManifestId(info.manifest_id), DepotKey(key)))
+    }
+
+    pub fn set_installing(
+        &mut self,
+        depot_id: DepotId,
+        manifest_id: ManifestId,
+        depot_key: &DepotKey,
+    ) {
+        let entry = self.depots.entry(depot_id.0).or_insert_with(|| DepotInfo {
+            manifest_id: 0,
+            depot_key: steamroom::util::hex::encode(&depot_key.0),
+            installing: None,
+        });
+        entry.depot_key = steamroom::util::hex::encode(&depot_key.0);
+        entry.installing = Some(manifest_id.0);
+    }
+
+    pub fn set_installed(
+        &mut self,
+        depot_id: DepotId,
+        manifest_id: ManifestId,
+        depot_key: &DepotKey,
+    ) {
+        self.depots.insert(
+            depot_id.0,
+            DepotInfo {
+                manifest_id: manifest_id.0,
+                depot_key: steamroom::util::hex::encode(&depot_key.0),
+                installing: None,
+            },
+        );
+    }
+
+    /// Save the raw CDN manifest response (zip-compressed, filenames still encrypted).
+    pub fn save_manifest_raw(
+        install_dir: &Path,
+        depot_id: DepotId,
+        manifest_id: ManifestId,
+        data: &[u8],
+    ) -> Result<(), std::io::Error> {
+        let dir = Self::manifests_dir(install_dir);
+        std::fs::create_dir_all(&dir)?;
+        std::fs::write(
+            dir.join(format!("{}_{}.zip", depot_id.0, manifest_id.0)),
+            data,
+        )
+    }
+
+    /// Save the decompressed manifest bytes (protobuf sections, pre-filename-decryption).
+    pub fn save_manifest_decompressed(
+        install_dir: &Path,
+        depot_id: DepotId,
+        manifest_id: ManifestId,
+        data: &[u8],
+    ) -> Result<(), std::io::Error> {
+        let dir = Self::manifests_dir(install_dir);
+        std::fs::create_dir_all(&dir)?;
+        std::fs::write(
+            dir.join(format!("{}_{}.manifest", depot_id.0, manifest_id.0)),
+            data,
+        )
+    }
+
+    /// Load a previously saved decompressed manifest.
+    pub fn load_manifest_decompressed(
+        install_dir: &Path,
+        depot_id: DepotId,
+        manifest_id: ManifestId,
+    ) -> Option<Vec<u8>> {
+        let path = Self::read_config_dir(install_dir)
+            .join("manifests")
+            .join(format!("{}_{}.manifest", depot_id.0, manifest_id.0));
+        std::fs::read(&path).ok()
+    }
+}
