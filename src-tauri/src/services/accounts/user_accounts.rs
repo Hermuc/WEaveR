@@ -149,6 +149,22 @@ impl UserAccountsStore {
             .and_then(|a| a.session.clone())
     }
 
+    /// Forget the saved OAuth session for one account, keeping its username and
+    /// password.
+    ///
+    /// This is the counterpart to `set_session` and is used on sign-out: the
+    /// tokens in `user_accounts.enc` are what let the next launch rebuild the
+    /// `steamLoginSecure` cookie without the user, so a sign-out that left them
+    /// behind would silently sign the user back in on the next start.
+    pub fn clear_session(&self, username: &str) -> Result<(), String> {
+        let mut guard = self.accounts.lock();
+        let Some(entry) = guard.iter_mut().find(|a| a.username == username) else {
+            return Err("Account not found".into());
+        };
+        entry.session = None;
+        save_accounts(&self.file_path, &self.cipher, &guard)
+    }
+
     pub fn remove(&self, username: &str) -> Result<(), String> {
         let mut guard = self.accounts.lock();
         let before = guard.len();

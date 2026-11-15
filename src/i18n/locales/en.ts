@@ -308,6 +308,7 @@ export default {
       "One account signs in for browsing and is used for downloads.",
     sign_in: "Sign in with Steam",
     sign_out: "Sign out",
+    signed_out: "Signed out of Steam",
     confirm_sign_out:
       "Sign out of Steam? Browsing age-gated items and downloads will stop until you sign in again.",
     signed_in_status: "Signed in",

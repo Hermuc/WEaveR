@@ -148,8 +148,22 @@ function AccountCard({ onOpenParser }: { onOpenParser: () => void }) {
       if (!confirmed) return;
       setBusy(true);
       try {
-        await invoke("steam_login_prepare").catch(() => undefined);
+        // Real sign-out: clears the Steam cookies, the in-memory jar and the
+        // saved OAuth session. `steam_login_prepare` only navigates to the
+        // login page and deliberately keeps the session, so it was a no-op here.
+        const res = await tryInvokeAction("steam_sign_out");
+        if (!res.ok) {
+          pushToast(
+            `${t("messages.error") || "Could not sign out"}: ${res.error}`,
+            "error",
+          );
+          return;
+        }
+        // Clear the badge immediately; the probe below confirms it.
+        setSessionLoggedIn(null);
+        pushToast(t("settings.signed_out") || "Signed out of Steam", "success");
         await refreshSession();
+        triggerGlobalRefresh();
       } finally {
         setBusy(false);
       }

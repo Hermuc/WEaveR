@@ -101,6 +101,11 @@ impl AccountManager {
         self.user_store.session_for(username)
     }
 
+    /// Forget the saved OAuth session for one account (keeps username/password).
+    pub fn clear_session(&self, username: &str) -> Result<(), String> {
+        self.user_store.clear_session(username)
+    }
+
     pub fn remove_user_account(&self, username: &str) -> Result<(), String> {
         self.user_store.remove(username)
     }

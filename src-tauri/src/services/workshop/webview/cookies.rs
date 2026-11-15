@@ -124,4 +124,96 @@ impl SteamWebview {
         }
         Ok(n)
     }
+
+    /// Sign the user out of Steam: delete the Steam cookies from WebView2 and
+    /// expire the copies in the in-memory reqwest jar.
+    ///
+    /// Deliberately narrower than `logout_locked`: that one runs
+    /// `clear_all_browsing_data()` (destroys the whole WebView2 profile) and is
+    /// meant for "clear the page before a fresh sign-in". This method deletes
+    /// only the Steam cookies, leaves every other site/device-code state intact,
+    /// and is safe to run when the user simply wants to sign out.
+    ///
+    /// It does NOT clear the persisted OAuth session in `user_accounts.enc`;
+    /// that is the caller's job, because otherwise the next launch would rebuild
+    /// the cookies from the saved access token and silently sign back in.
+    pub async fn sign_out(&self) -> Result<usize, String> {
+        let _g = self.lock.lock().await;
+        // The cookie list is only readable once the window exists. Create it
+        // first, exactly as `init_cookies` does at startup.
+        let _ = self.ensure_profile_loaded().await;
+        let Some(w) = self.app.get_webview_window(LABEL) else {
+            return Err("webview window unavailable".into());
+        };
+
+        let mut removed = 0usize;
+        for cookie in w.cookies().map_err(|e| e.to_string())? {
+            let domain = cookie.domain().unwrap_or_default().to_string();
+            if is_steam_domain(&domain) {
+                w.delete_cookie(cookie).map_err(|e| e.to_string())?;
+                removed += 1;
+            }
+        }
+
+        // reqwest::Jar exposes no clear() in 0.13, so expire the entries instead:
+        // a `Max-Age=0` cookie that matches an existing one marks it expired, and
+        // the jar filters expired cookies out of every request.
+        for (host, domain_attr) in [
+            ("https://steamcommunity.com", ".steamcommunity.com"),
+            ("https://store.steampowered.com", ".steampowered.com"),
+        ] {
+            if let Ok(url) = host.parse::<url::Url>() {
+                for name in STEAM_COOKIE_NAMES {
+                    self.jar.add_cookie_str(
+                        &format!("{name}=; Domain={domain_attr}; Path=/; Max-Age=0"),
+                        &url,
+                    );
+                }
+            }
+        }
+
+        log::info!("[steam-signout] deleted {removed} Steam cookies from the webview");
+        Ok(removed)
+    }
+}
+
+/// Cookie names WEave writes for a Steam session. Used both when syncing into
+/// the reqwest jar and when expiring them on sign-out, so the two can never
+/// drift apart.
+const STEAM_COOKIE_NAMES: [&str; 2] = ["steamLoginSecure", "sessionid"];
+
+/// Whether a cookie's domain belongs to Steam and should be treated as part of
+/// the login session.
+///
+/// Pure so it can be tested without a webview. Matches the same two domains
+/// `sync_cookies` copies, using a suffix test so both a leading-dot
+/// (`.steamcommunity.com`) and a host-only form match.
+fn is_steam_domain(domain: &str) -> bool {
+    let d = domain.trim_start_matches('.');
+    d == "steamcommunity.com"
+        || d.ends_with(".steamcommunity.com")
+        || d == "steampowered.com"
+        || d.ends_with(".steampowered.com")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recognises_steam_domains() {
+        assert!(is_steam_domain("steamcommunity.com"));
+        assert!(is_steam_domain(".steamcommunity.com"));
+        assert!(is_steam_domain("store.steampowered.com"));
+        assert!(is_steam_domain(".steampowered.com"));
+        assert!(is_steam_domain("checkout.steampowered.com"));
+    }
+
+    #[test]
+    fn rejects_unrelated_domains() {
+        assert!(!is_steam_domain("example.com"));
+        assert!(!is_steam_domain("notsteamcommunity.com"));
+        assert!(!is_steam_domain("steamcommunity.com.evil.com"));
+        assert!(!is_steam_domain(""));
+    }
 }

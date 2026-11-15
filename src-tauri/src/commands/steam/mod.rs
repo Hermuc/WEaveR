@@ -5,6 +5,8 @@
 
 mod oauth;
 mod qr;
+mod signout;
 
 pub use oauth::*;
 pub use qr::*;
+pub use signout::*;

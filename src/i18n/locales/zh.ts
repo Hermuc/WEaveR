@@ -307,6 +307,7 @@ export default {
     account_section_description: "同一个账号用于浏览登录与下载。",
     sign_in: "使用 Steam 登录",
     sign_out: "退出登录",
+    signed_out: "已退出 Steam 登录",
     confirm_sign_out: "确定退出 Steam 登录？退出后将无法浏览 18+ 内容，也无法下载，直到重新登录。",
     signed_in_status: "已登录",
     saved_not_signed_in: "已保存账号 — 未登录",
