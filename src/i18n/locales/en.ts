@@ -309,6 +309,10 @@ export default {
     sign_in: "Sign in with Steam",
     sign_out: "Sign out",
     signed_out: "Signed out of Steam",
+    clear_cache: "Clear cache",
+    clear_cache_hint:
+      "Drop the Workshop page cache and the WebView cache. The signed-in session is kept.",
+    clear_cache_done: "Cache cleared",
     confirm_sign_out:
       "Sign out of Steam? Browsing age-gated items and downloads will stop until you sign in again.",
     signed_in_status: "Signed in",

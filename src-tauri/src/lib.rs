@@ -158,6 +158,7 @@ pub fn run() {
             commands::steam::steam_auto_login,
             commands::steam::steam_login_prepare,
             commands::steam::steam_sign_out,
+            commands::steam::steam_clear_browsing_cache,
             commands::steam::steam_qr_begin,
             commands::steam::steam_qr_poll,
             commands::steam::steam_qr_login_finalize,

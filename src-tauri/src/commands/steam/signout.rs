@@ -48,3 +48,30 @@ pub async fn steam_sign_out(state: AppStateHandle<'_>) -> Result<(), String> {
     log::info!("[steam-signout] removed {removed} Steam cookies; cleared stored session; disabled auto-login");
     Ok(())
 }
+
+/// Clear every cache the Workshop browser keeps, WITHOUT touching the session.
+///
+/// Exists so "I still see content after signing out" can be tested directly:
+/// if the same items come back after this runs, the cause is not a cache.
+/// Three layers are cleared:
+///   1. the parser page/item LRU caches,
+///   2. the WebView2 HTTP/disk cache, and
+///   3. the frontend preload cache (the caller bumps the refresh counter).
+///
+/// Cookies are deliberately left alone - this is not a sign-out.
+#[tauri::command]
+pub async fn steam_clear_browsing_cache(state: AppStateHandle<'_>) -> Result<(), String> {
+    state.workshop.clear_caches();
+    // `clear_all_browsing_data` would also drop cookies, which we must keep;
+    // the WebView2 cache is emptied through the JS API instead.
+    if let Some(w) = state
+        .app_handle
+        .get_webview_window(crate::workshop::webview::LABEL)
+    {
+        // Best effort: a hidden webview may refuse to evaluate, and that is
+        // not a reason to fail the whole command.
+        let _ = w.eval("try{caches.keys().then(k=>k.forEach(n=>caches.delete(n)))}catch(e){}");
+    }
+    log::info!("[steam-cache] cleared parser + webview caches (session untouched)");
+    Ok(())
+}

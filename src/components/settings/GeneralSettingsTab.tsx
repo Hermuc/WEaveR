@@ -9,6 +9,7 @@ import { inTauri, invoke, tryInvokeAction } from "@/lib/tauri";
 import { pushToast } from "@/stores/toasts";
 import { ThemeCode, useAppStore } from "@/stores/app";
 import { Row, Section, SettingSwitch } from "./SettingsDialogShared";
+import { triggerGlobalRefresh } from "@/stores/refresh";
 import { Search } from "lucide-react";
 
 const THEMES: { value: ThemeCode; label: string }[] = [
@@ -42,6 +43,7 @@ export default function GeneralSettingsTab() {
   const { t } = useTranslation();
   const state = useAppStore();
   const [q, setQ] = useState("");
+  const [clearingCache, setClearingCache] = useState(false);
   const query = q.toLowerCase();
 
   const match = (text: string) => text.toLowerCase().includes(query);
@@ -204,6 +206,35 @@ export default function GeneralSettingsTab() {
           t("settings.auto_apply_last_downloaded") || "Auto apply last downloaded",
           t("settings.auto_apply_hint") || "Automatically apply wallpaper after download completes",
           <SettingSwitch path="settings.general.behavior.auto_apply_last_downloaded" fallback={false} />
+        )}
+        {renderRow(
+          t("settings.clear_cache") || "Clear cache",
+          t("settings.clear_cache_hint") ||
+            "Drop the Workshop page cache and the WebView cache. The signed-in session is kept.",
+          <button
+            className="btn-outline"
+            disabled={!inTauri || clearingCache}
+            onClick={async () => {
+              setClearingCache(true);
+              try {
+                const res = await tryInvokeAction("steam_clear_browsing_cache");
+                if (!res.ok) {
+                  pushToast(`${t("messages.error") || "Failed"}: ${res.error}`, "error");
+                  return;
+                }
+                triggerGlobalRefresh();
+                pushToast(t("settings.clear_cache_done") || "Cache cleared", "success");
+              } finally {
+                setClearingCache(false);
+              }
+            }}
+          >
+            {clearingCache ? (
+              <span className="inline-block size-3.5 animate-spin rounded-full border-2 border-current border-t-transparent" />
+            ) : (
+              t("settings.clear_cache") || "Clear cache"
+            )}
+          </button>
         )}
         {renderRow(
           t("settings.infinite_retry_accounts") || "Infinite retry",
