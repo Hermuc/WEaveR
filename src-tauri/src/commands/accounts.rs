@@ -37,12 +37,14 @@ pub fn accounts_list(state: AppStateHandle<'_>) -> Vec<AccountSummary> {
         .collect()
 }
 
-/// Add a user account and sign in with it.
+/// Add or update a user account's stored credentials.
 ///
-/// This is the single sign-in entry point. The password is stored encrypted via
-/// `UserAccountsStore` (PBKDF2 + AES-256-GCM, machine-bound key), and the same
-/// credentials are then used to establish the Workshop parser session, so one
-/// account covers both browsing and downloading.
+/// This is a persistence-only command: the password is stored encrypted via
+/// `UserAccountsStore` (PBKDF2 + AES-256-GCM, machine-bound key). It does NOT
+/// perform a sign-in — every caller has already authenticated through its own
+/// path (OAuth for `LoginModal`, DepotDownloader for `DownloadLoginModal`).
+/// Keeping this side-effect free is what stops the sign-in/confirm/wipe loop;
+/// see the note in the function body.
 #[command]
 pub async fn accounts_set_custom(
     state: AppStateHandle<'_>,
@@ -52,14 +54,18 @@ pub async fn accounts_set_custom(
     let user = username.trim().to_string();
     state.accounts.add_user_account(&user, password.as_str())?;
 
-    // login_fill shows Steam's real window, which is exactly what the Steam
-    // Guard step needs. It returns Ok(true) when no guard was required; either
-    // way the session is established (or the user finishes it in that window).
-    state
-        .steam_webview
-        .login_fill(&user, password.as_str())
-        .await?;
-
+    // Persist ONLY. Do NOT call `login_fill` here.
+    //
+    // This used to also drive a full web-form login, which was wrong for every
+    // caller: both entry points (`LoginModal` via the OAuth commands,
+    // `DownloadLoginModal` via `accounts_verify_custom`) have *already*
+    // authenticated by the time they save, so signing in again was redundant.
+    // Worse, `login_fill` starts with `logout_locked()`
+    // (`clear_all_browsing_data()`), which wiped the `steamLoginSecure` cookie
+    // the caller had just obtained. The poll loop then saw "signed in", called
+    // back in to save, got logged out again, and Steam re-issued a mobile-app
+    // confirmation — an endless sign-in/confirm/wipe cycle that only stopped
+    // when the user closed the window.
     Ok(())
 }
 

@@ -25,6 +25,12 @@ export default function LoginModal({
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
+  // One-shot guard: `finalizeLogin` is reached from three paths (probe poll,
+  // QR finalize, credential submit). Without this it could run twice and, in
+  // the old build, each run's credential-save triggered another sign-in which
+  // wiped the cookie — an endless sign-in/confirm loop. Harmless now that the
+  // backend no longer signs in on save, but keep it as defence in depth.
+  const finalizedRef = useRef(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [qrCode, setQrCode] = useState<string | null>(null);
   const [qrSession, setQrSession] = useState<{
@@ -64,6 +70,10 @@ export default function LoginModal({
   // Reset state when opened
   useEffect(() => {
     if (!open) return;
+
+    // Re-arm the one-shot finalize guard each time the dialog opens. Done in an
+    // effect (not during render) — React forbids touching refs while rendering.
+    finalizedRef.current = false;
 
     tryInvoke("steam_login_prepare").then(() => {
       setIsPrepared(true);
@@ -109,6 +119,9 @@ export default function LoginModal({
   }, [setSessionLoggedIn]);
 
   const finalizeLogin = useCallback(async () => {
+    if (finalizedRef.current) return;
+    finalizedRef.current = true;
+
     await invoke<number>("steam_sync_cookies").catch(() => 0);
 
     // Persist the credentials we just signed in with.
