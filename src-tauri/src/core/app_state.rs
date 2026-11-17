@@ -13,6 +13,7 @@ use crate::download::DownloadManager;
 use crate::extract::ExtractManager;
 use crate::i18n::I18nService;
 use crate::plugins::plugin_manager;
+use crate::services::steam_session::SteamSessionService;
 use crate::we_client::WallpaperEngineClient;
 use crate::workshop::webview::SteamWebview;
 use crate::workshop::WorkshopClient;
@@ -32,6 +33,8 @@ pub struct AppState {
     pub downloads: Arc<DownloadManager>,
     pub extracts: Arc<ExtractManager>,
     pub steam_webview: Arc<SteamWebview>,
+    /// Steam token lifecycle (refresh / verify) — see services::steam_session.
+    pub steam_session: Arc<SteamSessionService>,
     /// Path to portable .NET Runtime directory (if needed).
     /// None means use system .NET installation.
     pub dotnet_root: Arc<Mutex<Option<PathBuf>>>,
@@ -60,7 +63,8 @@ impl AppState {
         let i18n = I18nService::new();
 
         log::debug!("Loading account manager");
-        let accounts = AccountManager::from_runtime(&app_data_dir);
+        let accounts = Arc::new(AccountManager::from_runtime(&app_data_dir));
+        let steam_session = Arc::new(SteamSessionService::new(accounts.clone()));
 
         // Resolve the WE install directory: prefer whatever the user has
         // saved, otherwise auto-detect (Steam library scan + registry).
@@ -100,13 +104,14 @@ impl AppState {
             settings: Arc::new(RwLock::new(settings)),
             metadata: Arc::new(RwLock::new(metadata)),
             i18n: Arc::new(RwLock::new(i18n)),
-            accounts: Arc::new(accounts),
+            accounts,
             last_downloaded: Arc::new(Mutex::new(None)),
             we_client: Arc::new(RwLock::new(we_client)),
             workshop,
             downloads: Arc::new(downloads),
             extracts: Arc::new(extracts),
             steam_webview: Arc::new(steam_webview),
+            steam_session,
             dotnet_root: Arc::new(Mutex::new(None)),
             dotnet_initialized: Arc::new(AtomicBool::new(false)),
             plugins_initialized: Arc::new(AtomicBool::new(false)),
@@ -122,6 +127,7 @@ impl AppState {
         let steam_webview = self.steam_webview.clone();
         let workshop = self.workshop.clone();
         let accounts = self.accounts.clone();
+        let steam_session = self.steam_session.clone();
         std::thread::spawn(move || {
             // Wait for the main thread to reach the event loop.
             //
@@ -135,34 +141,54 @@ impl AppState {
             std::thread::sleep(EVENT_LOOP_SETTLE);
             let rt = tokio::runtime::Runtime::new().expect("build tokio runtime");
             rt.block_on(async move {
-                // Create the hidden Steam webview first. Every cookie/session
-                // read short-circuits to "logged out" when the window does
-                // not exist yet, and nothing used to create it at startup —
-                // so WebView2's persisted `steamLoginSecure` was never read
-                // and the user appeared signed out after every restart.
-                let profile_ready = steam_webview.ensure_profile_loaded().await;
+                // Prepare the window and the token at the same time: they are
+                // independent (webview lifecycle vs. token store / refresh), and
+                // running them in sequence added the window's rehydration budget
+                // to every launch even though neither waits for the other.
+                let acct = accounts.preferred_parser_credentials().username;
+                let (profile_ready, token_result) = tokio::join!(
+                    steam_webview.ensure_profile_loaded(),
+                    async {
+                        if acct.is_empty() {
+                            Ok(None)
+                        } else {
+                            steam_session.ensure_access_token(&acct).await
+                        }
+                    }
+                );
                 log::info!("[startup] webview profile ready: {profile_ready}");
 
                 // Fast path: a stored OAuth session can rebuild the login
-                // cookies without any sign-in, so try that before falling back
-                // to whatever the WebView2 profile happens to hold.
-                // Resolve the session we would restore, if any.
-                let acct = accounts.preferred_parser_credentials().username;
-                let saved_session = accounts
-                    .session_for(&acct)
-                    .filter(|s| !s.steam_id.is_empty() && !s.access_token.is_empty());
-
+                // cookies without any sign-in. The token service checks expiry
+                // and refreshes with the refresh token when needed, so a session
+                // that sat unused for more than a day still comes back.
                 let mut restored = false;
-                if let Some(session) = saved_session {
-                    let installed = steam_webview
-                        .install_session_cookies(&session.steam_id, &session.access_token)
-                        .is_ok();
-                    if installed {
-                        // Wait for the webview to pick up the injected cookies
-                        // before declaring the saved session restored.
-                        tokio::time::sleep(SESSION_RESTORE_SETTLE).await;
-                        restored = true;
-                        log::info!("[startup] installed saved session for {acct}");
+                match token_result {
+                    Ok(Some(access)) => {
+                        if let Some(session) = steam_session.stored(&acct) {
+                            let installed = steam_webview
+                                .install_session_cookies(&session.steam_id, &access)
+                                .is_ok();
+                            if installed {
+                                // Poll instead of sleeping a fixed 1.2s: the
+                                // cookie is normally visible in well under 300ms.
+                                let ready = steam_webview.wait_for_session_cookie(10, 100).await;
+                                restored = ready;
+                                if ready {
+                                    log::info!("[startup] installed session for {acct}");
+                                } else {
+                                    log::warn!(
+                                        "[startup] session cookie did not become visible for {acct}"
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    Ok(None) => {
+                        log::info!("[startup] no usable Steam session material for {acct}")
+                    }
+                    Err(e) => {
+                        log::warn!("[startup] could not prepare Steam session for {acct}: {e}")
                     }
                 }
                 log::info!("[startup] steam session restored: {restored}");
@@ -297,5 +323,3 @@ pub fn resolve_app_data_dir() -> PathBuf {
 // ── Timing constants ──────────────────────────────────────────
 /// Let the main thread start pumping before posting to it.
 const EVENT_LOOP_SETTLE: std::time::Duration = std::time::Duration::from_millis(300);
-/// Wait for injected cookies to apply before declaring restore.
-const SESSION_RESTORE_SETTLE: std::time::Duration = std::time::Duration::from_millis(1200);

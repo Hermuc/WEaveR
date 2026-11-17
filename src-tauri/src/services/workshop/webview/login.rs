@@ -104,12 +104,14 @@ impl SteamWebview {
             return Ok(false);
         }
 
-        // Early return if we're already logged in from a previous run,
-        // unless the caller explicitly wants to force a re-login.
-        if !force && self.is_logged_in_inner() {
-            log::info!("[login-flow] session cookie already present; nothing to do");
-            return Ok(true);
-        }
+        // NOTE: deliberately no "cookie already present" early return here.
+        //
+        // `is_logged_in_inner()` only checks that a `steamLoginSecure` cookie
+        // exists — Steam keeps stale cookies after the token behind them has
+        // expired. Returning true on that basis made `steam_auto_login` report
+        // success while the Workshop stayed anonymous, which is how "signed in,
+        // but every page is logged out" happened. The caller verifies against
+        // Steam before deciding; this function must do the actual sign-in.
 
         let Some(w) = self.app.get_webview_window(LABEL) else {
             log::warn!("[login-flow] abort: window handle unavailable");

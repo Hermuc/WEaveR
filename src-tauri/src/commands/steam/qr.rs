@@ -237,7 +237,7 @@ pub async fn steam_qr_poll(
 pub async fn steam_qr_login_finalize(
     state: AppStateHandle<'_>,
     access_token: String,
-    _refresh_token: String,
+    refresh_token: String,
 ) -> Result<(), String> {
     // Same JWT decoding as the OAuth path; one implementation, not two.
     let steamid = jwt_subject(&access_token)
@@ -290,17 +290,11 @@ pub async fn steam_qr_login_finalize(
     // Persist the session so the next launch can skip the whole QR dance.
     let account = state.accounts.preferred_parser_credentials().username;
     if !account.is_empty() {
-        let session = crate::accounts::StoredSteamSession {
-            steam_id: steamid.to_string(),
-            access_token: access_token.clone(),
-            refresh_token: _refresh_token.clone(),
-            saved_at: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0),
-        };
-        match state.accounts.set_session(&account, session) {
-            Ok(()) => log::info!("[steam-session] saved QR session for {account}"),
+        match state
+            .steam_session
+            .save_tokens(&account, &access_token, &refresh_token)
+        {
+            Ok(_) => log::info!("[steam-session] saved QR session for {account}"),
             Err(e) => log::warn!("[steam-session] could not save QR session: {e}"),
         }
     }
@@ -318,12 +312,48 @@ pub async fn steam_qr_login_finalize(
 /// as "the user is signed out".
 #[tauri::command]
 pub async fn steam_probe_account(state: AppStateHandle<'_>) -> Result<serde_json::Value, String> {
-    state.steam_webview.ensure_profile_loaded().await;
-    let _ = state.steam_webview.sync_cookies().await;
+    use crate::services::steam_session::SessionState;
 
+    state.steam_webview.ensure_profile_loaded().await;
+
+    // Prefer the session service's authoritative verification: it builds the
+    // `steamLoginSecure` cookie itself and asks Steam directly. The old path
+    // went through the reqwest cookie jar, which can lag behind a freshly
+    // installed cookie and reported `signed_out` for a valid session — that
+    // false negative is what made startup re-run `steam_restore_session`.
+    let account_name = state.accounts.preferred_parser_credentials().username;
+    if !account_name.is_empty() {
+        if let Ok(Some(access)) = state.steam_session.ensure_access_token(&account_name).await {
+            if let Some(session) = state.steam_session.stored(&account_name) {
+                let verdict = state.steam_session.verify(&session.steam_id, &access).await;
+                log::info!(
+                    "[probe] steam_probe_account -> {} (verify)",
+                    match verdict {
+                        SessionState::SignedIn => "signed_in",
+                        SessionState::SignedOut => "signed_out",
+                        SessionState::Unknown => "unknown",
+                    }
+                );
+                return match verdict {
+                    SessionState::SignedIn => {
+                        // Fetch the profile for the sidebar; a failure here is
+                        // cosmetic, so fall back to the minimal identity.
+                        let profile = state.workshop.current_account().await;
+                        Ok(signed_in_json(profile, &session.steam_id, &account_name))
+                    }
+                    SessionState::SignedOut => Ok(serde_json::json!({ "state": "signed_out" })),
+                    SessionState::Unknown => Ok(serde_json::json!({ "state": "unknown" })),
+                };
+            }
+        }
+    }
+
+    // No stored session: fall back to the jar-based probe (e.g. a live webview
+    // session established by the QR form but not yet persisted).
+    let _ = state.steam_webview.sync_cookies().await;
     let result = state.workshop.probe_account().await;
     log::info!(
-        "[probe] steam_probe_account -> {}",
+        "[probe] steam_probe_account -> {} (jar)",
         match &result {
             crate::workshop::AccountProbe::SignedIn(a) => format!("signed_in({})", a.account_name),
             crate::workshop::AccountProbe::SignedOut => "signed_out".to_string(),
@@ -348,60 +378,104 @@ pub async fn steam_probe_account(state: AppStateHandle<'_>) -> Result<serde_json
     }
 }
 
+/// Build the `signed_in` payload for `steam_probe_account`.
+///
+/// The profile fetch is cosmetic (sidebar name/avatar). When it fails we still
+/// return a complete identity from the stored session so the UI can render
+/// "signed in" instead of degrading to an empty panel.
+fn signed_in_json(
+    profile: Option<crate::workshop::SteamAccount>,
+    steam_id: &str,
+    account_name: &str,
+) -> serde_json::Value {
+    let (persona_name, profile_account, profile_url, avatar_url) = match profile {
+        Some(p) => (p.persona_name, p.account_name, p.profile_url, p.avatar_url),
+        None => (String::new(), String::new(), String::new(), String::new()),
+    };
+    let display_account = if profile_account.is_empty() {
+        account_name.to_string()
+    } else {
+        profile_account
+    };
+    serde_json::json!({
+        "state": "signed_in",
+        "account": {
+            "persona_name": persona_name,
+            "account_name": display_account,
+            "steamid": steam_id,
+            "profile_url": profile_url,
+            "avatar_url": avatar_url,
+        },
+    })
+}
+
 /// Try to restore a Steam session from the encrypted account store.
 ///
 /// This is the fast path at startup: if a session was saved after an earlier
-/// sign-in, its `{steamid, access_token}` pair is enough to rebuild the
-/// `steamLoginSecure` cookie and skip the login page (and Steam Guard).
+/// sign-in, its tokens are enough to rebuild the `steamLoginSecure` cookie and
+/// skip the login page (and Steam Guard). Expired access tokens are refreshed
+/// with the stored refresh token (falling back to the Steam client's cached
+/// token when that exists).
 ///
-/// Returns `true` only when Steam actually accepts the reconstructed session —
-/// we verify by asking Steam who we are, not by trusting the cookie.
+/// Returns a three-state verdict:
+///   * `signed_in` — Steam accepted the reconstructed session;
+///   * `signed_out` — no usable session material, or Steam rejected it;
+///   * `unknown` — the verification call failed (network), which must not be
+///     reported as a logout.
 #[tauri::command]
 pub async fn steam_restore_session(
     state: AppStateHandle<'_>,
     username: Option<String>,
-) -> Result<bool, String> {
+) -> Result<crate::services::steam_session::SessionState, String> {
+    use crate::services::steam_session::SessionState;
+
     // Which account? Default to the first one the user added.
     let account = match username {
         Some(u) if !u.trim().is_empty() => u.trim().to_string(),
         _ => state.accounts.preferred_parser_credentials().username,
     };
     if account.is_empty() {
-        return Ok(false);
+        return Ok(SessionState::SignedOut);
     }
 
-    let Some(session) = state.accounts.session_for(&account) else {
-        log::info!("[steam-session] no saved session for {account}");
-        return Ok(false);
+    let Some(mut access) = state.steam_session.ensure_access_token(&account).await? else {
+        log::info!("[steam-session] no usable session material for {account}");
+        return Ok(SessionState::SignedOut);
     };
-    if session.steam_id.is_empty() || session.access_token.is_empty() {
-        log::info!("[steam-session] saved session for {account} is incomplete");
-        return Ok(false);
-    }
+    let Some(session) = state.steam_session.stored(&account) else {
+        return Ok(SessionState::SignedOut);
+    };
 
+    let mut result = install_and_verify(&state, &session.steam_id, &access).await?;
+    if result == SessionState::SignedOut {
+        // The token may still look valid locally (JWT exp in the future) while
+        // Steam has revoked it. Force one refresh before asking the user to log
+        // in again — this is the "signed in yesterday, revoked today" case.
+        if let Ok(Some(refreshed)) = state.steam_session.force_refresh(&account).await {
+            access = refreshed;
+            result = install_and_verify(&state, &session.steam_id, &access).await?;
+        }
+    }
+    log::info!("[steam-session] restore verify for {account}: {result:?}");
+    Ok(result)
+}
+
+/// Install a session cookie and ask Steam whether it is accepted.
+async fn install_and_verify(
+    state: &AppStateHandle<'_>,
+    steam_id: &str,
+    access_token: &str,
+) -> Result<crate::services::steam_session::SessionState, String> {
     // The window has to exist before cookies can be written into it.
     state.steam_webview.ensure_profile_loaded().await;
-
     state
         .steam_webview
-        .install_session_cookies(&session.steam_id, &session.access_token)
+        .install_session_cookies(steam_id, access_token)
         .map_err(|e| format!("install cookies: {e}"))?;
-
-    // Give the webview a moment, then confirm with Steam itself.
     tokio::time::sleep(COOKIE_APPLY_WAIT).await;
     let _ = state.steam_webview.sync_cookies().await;
     state.workshop.clear_caches();
-
-    match state.workshop.current_account().await {
-        Some(acc) => {
-            log::info!("[steam-session] restored session for {}", acc.account_name);
-            Ok(true)
-        }
-        None => {
-            log::warn!("[steam-session] saved session for {account} was rejected by Steam");
-            Ok(false)
-        }
-    }
+    Ok(state.steam_session.verify(steam_id, access_token).await)
 }
 
 /// Persist the OAuth tokens that came out of a successful sign-in.
@@ -483,3 +557,31 @@ pub async fn steam_login_poll_error(state: AppStateHandle<'_>) -> Result<Option<
 // The flow is split across three commands because each step may need something
 // from the user (a code, or a tap on their phone), and a Tauri command cannot
 // stay suspended waiting for that.
+#[cfg(test)]
+mod tests {
+    use super::signed_in_json;
+
+    #[test]
+    fn signed_in_json_uses_profile_when_available() {
+        let profile = crate::workshop::SteamAccount {
+            persona_name: "Persona".into(),
+            account_name: "account".into(),
+            steamid: "765".into(),
+            profile_url: "https://steamcommunity.com/id/x".into(),
+            avatar_url: "data:image/png;base64,x".into(),
+        };
+        let value = signed_in_json(Some(profile), "765", "fallback");
+        assert_eq!(value["state"], "signed_in");
+        assert_eq!(value["account"]["persona_name"], "Persona");
+        assert_eq!(value["account"]["account_name"], "account");
+        assert_eq!(value["account"]["steamid"], "765");
+    }
+
+    #[test]
+    fn signed_in_json_falls_back_to_account_name() {
+        let value = signed_in_json(None, "765", "fallback");
+        assert_eq!(value["account"]["account_name"], "fallback");
+        assert_eq!(value["account"]["steamid"], "765");
+        assert_eq!(value["account"]["persona_name"], "");
+    }
+}

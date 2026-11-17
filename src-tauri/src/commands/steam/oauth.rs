@@ -49,18 +49,9 @@ async fn complete_oauth_login(
         .ok_or_else(|| "access token is missing a SteamID".to_string())?;
 
     // Persist first: even if the browser part fails, the session is safe.
-    let session = crate::accounts::StoredSteamSession {
-        steam_id: steam_id.clone(),
-        access_token: tokens.access_token.clone(),
-        refresh_token: tokens.refresh_token.clone(),
-        saved_at: std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0),
-    };
     state
-        .accounts
-        .set_session(&username, session)
+        .steam_session
+        .save_login(&username, &tokens)
         .map_err(|e| format!("save session: {e}"))?;
 
     // Now make the webview authenticated so the Workshop UI works.
@@ -74,6 +65,19 @@ async fn complete_oauth_login(
     tokio::time::sleep(OAUTH_COOKIE_SETTLE).await;
     let _ = state.steam_webview.sync_cookies().await;
     state.workshop.clear_caches();
+
+    // A cookie that was just written is not proof that Steam accepts it.
+    // Verify against the community endpoint; `unknown` (network failure) is
+    // allowed through because the token is already saved and a later probe
+    // will settle it, but an explicit rejection must surface as a failure.
+    let verify = state
+        .steam_session
+        .verify(&steam_id, &tokens.access_token)
+        .await;
+    log::info!("[steam-session] OAuth login verify: {verify:?}");
+    if verify == crate::services::steam_session::SessionState::SignedOut {
+        return Err("Steam rejected the new session (steamLoginSecure)".to_string());
+    }
     super::mark_signed_in(state);
     let _ = state.app_handle.emit("steam-login-success", ());
 

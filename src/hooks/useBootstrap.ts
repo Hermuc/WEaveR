@@ -395,20 +395,25 @@ async function syncSteamSession() {
       return;
     }
 
-    // 2. Nobody signed in per Steam. Try an OAuth session saved at the last
-    //    successful login — `{steamid, access_token}` rebuilds `steamLoginSecure`
-    //    and skips both the login page and Steam Guard.
-    const restored = await tryInvoke<boolean>(
+    // 2. Nobody signed in per Steam. Try a stored session — the backend
+    //    refreshes expired access tokens and verifies the rebuilt cookie
+    //    against Steam itself. `unknown` means the verification call failed
+    //    (network), which must not be reported as a sign-out.
+    const restored = await tryInvoke<{ state: string }>(
       "steam_restore_session",
       { username: null },
-      false,
+      { state: "signed_out" },
     );
-    if (restored) {
+    if (restored?.state === "signed_in") {
       probe = await probeAccount();
       if (probe.state === "signed_in") {
         session.setLoggedIn(probe.account);
         return;
       }
+    }
+    if (restored?.state === "unknown") {
+      session.setUnknownOrKeep();
+      return;
     }
 
     // 3. Fall back to the stored credentials (may hit Steam Guard) — but ONLY if

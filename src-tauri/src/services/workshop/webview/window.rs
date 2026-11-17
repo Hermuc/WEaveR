@@ -164,8 +164,15 @@ impl SteamWebview {
         if !freshly_created {
             return self.is_logged_in_inner();
         }
-        // Freshly created: give WebView2 up to ~6s (40 * 150ms) to rehydrate.
-        self.wait_for_login(true, 40, 150).await
+        // Freshly created: give WebView2 a short window (8 * 50ms) to
+        // rehydrate its persisted cookie jar. This used to be 40 * 150ms
+        // (six seconds), but session cookies never survived a restart, so
+        // the loop always ran out its full budget. With the cookies written
+        // by `install_cookies_for_window` now persistent, the first or
+        // second tick usually finds them; when it does not (first ever run,
+        // or after a sign-out) the caller installs a fresh cookie anyway, so
+        // waiting longer buys nothing.
+        self.wait_for_login(true, 8, 50).await
     }
 
 

@@ -9,10 +9,12 @@
 
 ### Changed
 - **i18n:** Replaced hard-coded `isRu` Russian/English branches in the Workshop search-options popover with real translation keys.
+- **steam-session:** Startup no longer waits six seconds for a session cookie that cannot exist, and no longer probes through the reqwest cookie jar. Steam session cookies are now persisted (`max_age` 30 days), window/token preparation runs in parallel, the post-install wait is condition-based, and `steam_probe_account` verifies the session directly against `steamcommunity.com/my/`. Measured on this machine: 12.7s → 2.8s (cold startup, no persistent cookie) and 1.6s (persistent cookie hit). Details in `docs/STEAM-SESSION.md`.
 - **docs:** README now defaults to Simplified Chinese (`README.md`); the English version moved to `README.en.md`. All cross-links between the three READMEs updated.
 
 ### Fixed
 - **i18n:** Added the missing `labels.extract_prefix` key to the Russian bundle (present in English, absent in Russian upstream).
+- **steam-session:** Persist and refresh the Steam session so a login survives restarts. The stored `refresh_token` is now used to mint a fresh access token when the old one expires; a three-state probe (`signed_in`/`signed_out`/`unknown`) stops network failures from being reported as a logout; `steam_restore_session` verifies the rebuilt `steamLoginSecure` cookie against `steamcommunity.com/my/` before claiming success; the stale-cookie early return in `auto_login` (which made "auto login" report success while the Workshop stayed anonymous) is gone. Design and P0 measurements live in `docs/STEAM-SESSION.md`.
 
 ## [4.13.0](https://github.com/psyattack/WEave/compare/v4.12.0.0...v4.13.0) - 2026-09-18
 

@@ -30,6 +30,16 @@ impl SteamWebview {
     /// `logout_locked` and `is_logged_in`; they differed only in tick count,
     /// interval and the expected polarity. Everything else — the check, the
     /// sleep, the early return — was the same, so it lives here.
+    /// Wait until the webview holds a `steamLoginSecure` cookie.
+    ///
+    /// Public wrapper for startup glue: after `install_session_cookies`, the
+    /// cookie is usually visible within a tick or two, so this returns early
+    /// instead of paying a fixed sleep. Returns false when the budget runs out
+    /// (the caller can still continue; `verify` will settle the truth).
+    pub async fn wait_for_session_cookie(&self, ticks: u32, interval_ms: u64) -> bool {
+        self.wait_for_login(true, ticks, interval_ms).await
+    }
+
     pub(super) async fn wait_for_login(&self, want: bool, ticks: u32, interval_ms: u64) -> bool {
         for _ in 0..ticks {
             if self.is_logged_in_inner() == want {

@@ -109,6 +109,16 @@ pub fn install_cookies_for_window(
                 .path("/")
                 .secure(true)
                 .http_only(true)
+                // Persist the session cookies instead of writing session cookies.
+                //
+                // WebView2 discards session cookies when the process exits, so a
+                // fresh window used to start with an empty jar and
+                // `ensure_profile_loaded` had to poll for up to six seconds
+                // waiting for a cookie that could never appear. A 30-day expiry
+                // makes the window find the previous cookie immediately on
+                // startup; `ensure_access_token` overwrites it when the token
+                // has since expired.
+                .max_age(tauri::webview::cookie::time::Duration::days(30))
                 .build();
             w.set_cookie(cookie).map_err(|e| e.to_string())?;
         }
