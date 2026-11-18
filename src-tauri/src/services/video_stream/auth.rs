@@ -25,6 +25,7 @@ struct CachedSession {
 pub async fn shared_login(
     username: &str,
     password: &str,
+    session_refresh_token: Option<&str>,
 ) -> anyhow::Result<std::sync::Arc<SteamClient<LoggedIn>>> {
     // Reuse only for the same account; a different account must re-auth.
     {
@@ -35,7 +36,7 @@ pub async fn shared_login(
             }
         }
     }
-    let client = login(username, password).await?;
+    let client = login(username, password, session_refresh_token).await?;
     {
         let mut guard = SESSION.lock().unwrap();
         *guard = Some(CachedSession {
@@ -54,10 +55,32 @@ pub fn forget_session() {
 /// Establish a logged-in Steam session for the streaming pipeline.
 ///
 /// Tried in order, most convenient first:
+///   0. The refresh token of WEave's own saved session (the one the main
+///      Steam login persisted after OAuth/QR). This is the newest token we
+///      have and it needs neither a password nor Steam Guard — the previous
+///      implementation skipped it and fell through to the password flow.
 ///   1. Local Steam client token (DPAPI) — no password, no Steam Guard.
 ///   2. A refresh token WEave cached from an earlier sign-in.
 ///   3. Username + password — only for accounts without Steam Guard.
-pub async fn login(username: &str, password: &str) -> anyhow::Result<SteamClient<LoggedIn>> {
+pub async fn login(
+    username: &str,
+    password: &str,
+    session_refresh_token: Option<&str>,
+) -> anyhow::Result<SteamClient<LoggedIn>> {
+    if let Some(refresh_token) = session_refresh_token {
+        match LoginBuilder::new()
+            .device_name("WEaveR")
+            .with_refresh_token(username, refresh_token)
+            .login()
+            .await
+        {
+            Ok(client) => {
+                log::info!("[video-stream] logged in via saved session refresh token");
+                return Ok(client);
+            }
+            Err(e) => log::warn!("[video-stream] saved session refresh token failed: {e}"),
+        }
+    }
     if let Some(tok) = steamroom_client::steam_creds::extract_token(username) {
         match LoginBuilder::new()
             .device_name("WEaveR")

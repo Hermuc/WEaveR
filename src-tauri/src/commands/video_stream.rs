@@ -76,8 +76,12 @@ pub async fn video_stream_prewarm(
     }
     let reg = registry.inner().clone();
     let creds = state.accounts.preferred_parser_credentials();
+    let session_refresh_token = state
+        .accounts
+        .session_for(&creds.username)
+        .map(|session| session.refresh_token);
     tauri::async_runtime::spawn(async move {
-        let result = resolve_with_retry(&creds, item_id).await;
+        let result = resolve_with_retry(&creds, session_refresh_token.as_deref(), item_id).await;
         reg.pending.lock().remove(&item_id);
         match result {
             Ok(video) => {
@@ -102,18 +106,21 @@ pub async fn video_stream_prewarm(
 
 async fn resolve_with_retry(
     creds: &crate::services::accounts::AccountCredentials,
+    session_refresh_token: Option<&str>,
     item_id: u64,
 ) -> anyhow::Result<ResolvedVideo> {
     if creds.username.is_empty() {
         return Err(anyhow::anyhow!("NO_ACCOUNT"));
     }
-    let client = video_stream::shared_login(&creds.username, &creds.password).await?;
+    let client =
+        video_stream::shared_login(&creds.username, &creds.password, session_refresh_token).await?;
     match video_stream::resolve_video(&client, item_id).await {
         Ok(v) => Ok(v),
         Err(e) => {
             log::warn!("[video-stream] resolve on cached session failed ({e}); fresh login");
             video_stream::forget_session();
-            let fresh = video_stream::login(&creds.username, &creds.password).await?;
+            let fresh =
+                video_stream::login(&creds.username, &creds.password, session_refresh_token).await?;
             video_stream::resolve_video(&fresh, item_id).await
         }
     }
@@ -144,10 +151,14 @@ pub async fn video_stream_start(
     // Take the prewarmed video under a short-lived lock so the guard is dropped
     // before any await (parking_lot guards are not Send).
     let prewarmed = registry.ready.lock().remove(&item_id);
+    let session_refresh_token = state
+        .accounts
+        .session_for(&creds.username)
+        .map(|session| session.refresh_token);
     let video = match prewarmed {
         Some(v) => v,
         None => Arc::new(
-            resolve_with_retry(&creds, item_id)
+            resolve_with_retry(&creds, session_refresh_token.as_deref(), item_id)
                 .await
                 .map_err(|e| e.to_string())?,
         ),

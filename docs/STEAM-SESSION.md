@@ -93,7 +93,30 @@ steam_restore_session(account)
 5. `steam_probe_account` 改用 `steam_session.verify`（直接构造 cookie + `/my/` 302 判定），不再依赖 reqwest cookie jar 的时序；消除了启动时一次假的 `signed_out` 与重复 `steam_restore_session`。
 6. 刷新失败增加 5 分钟冷却；`force_refresh` 绕过冷却。
 
-## 七、已知限制
+## 七、视频流复用主会话 token（2026-11-18）
+
+「边下边看」走 `steamroom` 的 CM 登录读取 depot manifest。旧的 `video_stream::login` 只尝试：
+
+1. Steam 客户端本地 token（`local.vdf` / DPAPI）
+2. WEave 自己的 `steam_token_*.txt` 缓存
+3. 账号密码
+
+它**跳过了主应用已经保存的会话 refresh token**，所以 Steam Guard 账号在本地 token 失效时会直接落到密码登录并报：
+
+```
+启动播放失败: STEAM_GUARD_REQUIRED: sign in to the Steam desktop app so a reusable token exists
+```
+
+现在顺序改为：
+
+1. **`user_accounts.enc` 保存的 refresh token**（`AccountManager::session_for`）→ `LoginBuilder::with_refresh_token`
+2. Steam 客户端本地 token
+3. `steam_token_*.txt`
+4. 账号密码（仅无 Guard 账号）
+
+实测（2026-11-18，item 3838500850）：主会话 refresh token（495 字符，aud 含 `client,web,renew,derive`）可以成功完成 CM logon（`CM_LOGIN_OK`），并成功解析 depot manifest（`RESOLVE_OK filename=啊哈摇awy【崩坏星穹铁道Honkai Star Rail Aha】.mp4 total_size=219808775`）。
+
+## 八、已知限制
 
 - `steamcommunity_302` 未运行时，所有 Steam 请求失败 → `unknown`（这是预期行为，不代表会话失效）。
 - 本地 Steam token 需要 Steam 客户端运行且 token 未过期；不能保证可用。
