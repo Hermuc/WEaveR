@@ -21,6 +21,16 @@ impl ResolvedVideo {
     async fn fetch_chunk(&self, span: &ChunkSpan) -> anyhow::Result<Vec<u8>> {
         let _ = parse_chunk_id(&span.chunk_id)?;
 
+        // Disk cache first: replaying a watched item (or seeking back) must not
+        // hit the CDN again. Chunks are stored decrypted/decompressed, so a hit
+        // needs neither the depot key nor a network round-trip.
+        if let Some(bytes) =
+            super::disk_cache::load(self.info.item_id, self.info.manifest_id, &span.chunk_id)
+        {
+            log::debug!("[video-cache] disk hit chunk {}", span.chunk_id);
+            return Ok(bytes);
+        }
+
         if self.endpoints.is_empty() {
             return Err(anyhow::anyhow!("no CDN endpoints"));
         }
@@ -68,6 +78,14 @@ impl ResolvedVideo {
             if let Some((idx, out)) = res {
                 self.preferred
                     .store(idx, std::sync::atomic::Ordering::Relaxed);
+                if let Err(e) = super::disk_cache::store(
+                    self.info.item_id,
+                    self.info.manifest_id,
+                    &span.chunk_id,
+                    &out,
+                ) {
+                    log::debug!("[video-cache] store failed for chunk {}: {e}", span.chunk_id);
+                }
                 return Ok(out);
             }
             last_err = format!("chunk {} failed on a host", span.chunk_id);

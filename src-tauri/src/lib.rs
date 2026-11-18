@@ -173,6 +173,7 @@ pub fn run() {
             commands::video_stream::video_stream_player,
             commands::video_stream::video_stream_prewarm,
             commands::video_stream::video_stream_start,
+            commands::video_stream::video_stream_status,
             commands::video_stream::video_stream_stop,
             commands::video_stream::video_stream_stop_all,
         ]);

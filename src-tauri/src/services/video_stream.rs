@@ -14,6 +14,7 @@
 //! exists only for the "watch while downloading" path.
 
 mod auth;
+mod disk_cache;
 mod layout_cache;
 mod fetch;
 mod manifest;
@@ -130,6 +131,8 @@ pub async fn resolve_video(
 ) -> anyhow::Result<ResolvedVideo> {
     // (kept taking &SteamClient so callers can pass either an owned or cached one)
     let _t0 = std::time::Instant::now();
+    // Trim the on-disk chunk cache in the background; never blocks a resolve.
+    disk_cache::prune_once(disk_cache::MAX_CACHE_BYTES);
     let req = generated::CPublishedFileGetDetailsRequest {
         publishedfileids: vec![item_id],
         includechildren: Some(true),

@@ -92,29 +92,42 @@ pub fn detect() -> Option<Player> {
 
 /// Launch the player against `url`, detached from WEave.
 ///
-/// The player is spawned with no console window and not waited on: it keeps
-/// playing after WEave closes (the range server must therefore outlive this call
-/// only as long as the player needs it).
-pub fn launch(player: &Player, url: &str) -> std::io::Result<()> {
+/// Returns the child so the caller can wait for the player to exit and then
+/// tear the range server down. The previous version discarded it, so closing
+/// mpv left the server and its background prefetcher running until the next
+/// click or app exit.
+pub fn launch(player: &Player, url: &str) -> std::io::Result<std::process::Child> {
     let mut cmd = Command::new(&player.path);
     match player.kind {
         PlayerKind::Mpv => {
             // --force-window: show a window even though this is a stream.
             // --keep-open: do not exit at EOF (the file may still be growing).
             // --no-terminal: no console output.
+            // Cache options: the default demuxer cache is far too small for a
+            // CDN that can stall for seconds; 256 MiB forward / 64 MiB back keeps
+            // playback alive across those gaps and makes seeks cheap.
             cmd.arg("--force-window=yes")
                 .arg("--keep-open=yes")
                 .arg("--no-terminal")
+                .arg("--cache=yes")
+                .arg("--demuxer-max-bytes=256MiB")
+                .arg("--demuxer-max-back-bytes=64MiB")
+                .arg("--cache-pause=yes")
+                .arg("--cache-pause-wait=2")
+                .arg("--network-timeout=30")
                 .arg(url);
         }
         PlayerKind::Vlc => {
-            cmd.arg("--no-video-title-show").arg(url);
+            // VLC's default network cache is 1s; raise it for the same reason.
+            cmd.arg("--no-video-title-show")
+                .arg("--network-caching=3000")
+                .arg(url);
         }
     }
 
     crate::core::platform::hide_console_window(&mut cmd);
 
-    cmd.spawn().map(|_| ())
+    cmd.spawn()
 }
 
 #[cfg(test)]

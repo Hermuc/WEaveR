@@ -18,13 +18,23 @@ use crate::services::video_stream::{self, ResolvedVideo};
 
 type ReadyMap = std::collections::HashMap<u64, Arc<ResolvedVideo>>;
 
+/// Background resolution state for one item.
+#[derive(Clone)]
+enum PrewarmState {
+    Pending { started: std::time::Instant },
+    Ready,
+    Failed { message: String },
+}
+
 /// Live streams plus pre-resolved videos, keyed by workshop item id.
 #[derive(Default)]
 pub struct StreamRegistry {
     servers: Mutex<std::collections::HashMap<u64, VideoServer>>,
     ready: Mutex<ReadyMap>,
-    /// Items currently being resolved in the background (dedupe prewarm).
-    pending: Mutex<std::collections::HashSet<u64>>,
+    /// Prewarm lifecycle per item. This replaces the old "pending set" so the
+    /// UI can distinguish "still resolving", "ready" and "failed with a reason"
+    /// instead of only learning about failures when the user clicks watch.
+    state: Mutex<std::collections::HashMap<u64, PrewarmState>>,
 }
 
 impl StreamRegistry {
@@ -32,6 +42,13 @@ impl StreamRegistry {
         Self::default()
     }
 }
+
+/// How long `video_stream_start` waits for an in-flight prewarm before falling
+/// back to an inline resolve. Kept generous because the first manifest fetch on
+/// a slow network can legitimately take a minute; the point is to avoid a
+/// second concurrent resolve, not to cut the wait short.
+const PREWARM_WAIT_MAX: std::time::Duration = std::time::Duration::from_secs(120);
+const PREWARM_POLL: std::time::Duration = std::time::Duration::from_millis(200);
 
 #[derive(Debug, Serialize)]
 pub struct PlayerInfo {
@@ -69,10 +86,16 @@ pub async fn video_stream_prewarm(
         return Ok(());
     }
     {
-        let mut pending = registry.pending.lock();
-        if !pending.insert(item_id) {
+        let mut prewarm = registry.state.lock();
+        if matches!(prewarm.get(&item_id), Some(PrewarmState::Pending { .. })) {
             return Ok(()); // already resolving
         }
+        prewarm.insert(
+            item_id,
+            PrewarmState::Pending {
+                started: std::time::Instant::now(),
+            },
+        );
     }
     let reg = registry.inner().clone();
     let creds = state.accounts.preferred_parser_credentials();
@@ -82,7 +105,6 @@ pub async fn video_stream_prewarm(
         .map(|session| session.refresh_token);
     tauri::async_runtime::spawn(async move {
         let result = resolve_with_retry(&creds, session_refresh_token.as_deref(), item_id).await;
-        reg.pending.lock().remove(&item_id);
         match result {
             Ok(video) => {
                 // Browsing many wallpapers must not pin a resolved video (and
@@ -96,12 +118,61 @@ pub async fn video_stream_prewarm(
                     }
                 }
                 ready.insert(item_id, Arc::new(video));
+                drop(ready);
+                reg.state.lock().insert(item_id, PrewarmState::Ready);
                 log::info!("[video-stream] prewarm ready for {item_id}");
             }
-            Err(e) => log::warn!("[video-stream] prewarm failed for {item_id}: {e}"),
+            Err(e) => {
+                log::warn!("[video-stream] prewarm failed for {item_id}: {e}");
+                reg.state.lock().insert(
+                    item_id,
+                    PrewarmState::Failed {
+                        message: e.to_string(),
+                    },
+                );
+            }
         }
     });
     Ok(())
+}
+
+/// Report the prewarm lifecycle for an item so the UI can show
+/// "preparing"/"ready"/"failed" instead of a bare spinner.
+#[tauri::command]
+pub fn video_stream_status(
+    registry: State<'_, Arc<StreamRegistry>>,
+    item_id: u64,
+) -> VideoStreamStatus {
+    if registry.ready.lock().contains_key(&item_id) {
+        return VideoStreamStatus {
+            state: "ready".into(),
+            error: None,
+        };
+    }
+    match registry.state.lock().get(&item_id).cloned() {
+        Some(PrewarmState::Pending { .. }) => VideoStreamStatus {
+            state: "pending".into(),
+            error: None,
+        },
+        Some(PrewarmState::Failed { message }) => VideoStreamStatus {
+            state: "failed".into(),
+            error: Some(message),
+        },
+        Some(PrewarmState::Ready) => VideoStreamStatus {
+            state: "ready".into(),
+            error: None,
+        },
+        None => VideoStreamStatus {
+            state: "idle".into(),
+            error: None,
+        },
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct VideoStreamStatus {
+    pub state: String,
+    pub error: Option<String>,
 }
 
 async fn resolve_with_retry(
@@ -150,7 +221,41 @@ pub async fn video_stream_start(
 
     // Take the prewarmed video under a short-lived lock so the guard is dropped
     // before any await (parking_lot guards are not Send).
-    let prewarmed = registry.ready.lock().remove(&item_id);
+    //
+    // If a prewarm is still running, WAIT for it instead of resolving again.
+    // The old code started a second full login + manifest fetch in parallel,
+    // which doubled the network work and often made the click slower than the
+    // prewarm it was supposed to benefit from.
+    let mut prewarmed = registry.ready.lock().remove(&item_id);
+    let wait_started = std::time::Instant::now();
+    while prewarmed.is_none() {
+        if let Some(v) = registry.ready.lock().remove(&item_id) {
+            prewarmed = Some(v);
+            break;
+        }
+        let prewarm = registry.state.lock().get(&item_id).cloned();
+        match prewarm {
+            Some(PrewarmState::Pending { started }) => {
+                if wait_started.elapsed() >= PREWARM_WAIT_MAX
+                    || started.elapsed() >= PREWARM_WAIT_MAX
+                {
+                    log::warn!(
+                        "[video-stream] prewarm for {item_id} still pending after {:?}; resolving inline",
+                        wait_started.elapsed()
+                    );
+                    break;
+                }
+                tokio::time::sleep(PREWARM_POLL).await;
+            }
+            Some(PrewarmState::Failed { message }) => {
+                log::warn!(
+                    "[video-stream] prewarm for {item_id} failed: {message}; resolving inline"
+                );
+                break;
+            }
+            _ => break,
+        }
+    }
     let session_refresh_token = state
         .accounts
         .session_for(&creds.username)
@@ -169,9 +274,27 @@ pub async fn video_stream_start(
         .await
         .map_err(|e| e.to_string())?;
     let url = server.url();
-    video_player::launch(&player, &url).map_err(|e| format!("launch failed: {e}"))?;
+    let port = server.port;
+    let mut child = video_player::launch(&player, &url).map_err(|e| format!("launch failed: {e}"))?;
     let player_name = player.kind.name().to_string();
     registry.servers.lock().insert(item_id, server);
+
+    // The player owns the WebView-like lifecycle now: when mpv/VLC exits, stop
+    // the range server so its prefetcher stops downloading the rest of the file
+    // in the background. Match on port so a re-click (which replaced the server)
+    // cannot stop the newer stream by accident.
+    let registry_for_wait = registry.inner().clone();
+    tauri::async_runtime::spawn(async move {
+        let status = tokio::task::spawn_blocking(move || child.wait()).await;
+        log::info!("[video-stream] player exited for {item_id}: {status:?}");
+        let mut servers = registry_for_wait.servers.lock();
+        if servers.get(&item_id).map(|s| s.port) == Some(port) {
+            if let Some(mut s) = servers.remove(&item_id) {
+                s.stop();
+                log::info!("[video-stream] stopped range server for {item_id}");
+            }
+        }
+    });
 
     Ok(StreamStarted {
         item_id,
