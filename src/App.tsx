@@ -8,6 +8,7 @@ import WorkshopView from "@/components/views/WorkshopView";
 import CollectionsView from "@/components/views/CollectionsView";
 import InstalledView from "@/components/views/InstalledView";
 import AuthorView from "@/components/views/AuthorView";
+import SyncView from "@/components/views/SyncView";
 import SettingsDialog from "@/components/settings/SettingsDialog";
 import MultiDownloadDialog from "@/components/dialogs/MultiDownloadDialog";
 import InfoDialog from "@/components/dialogs/InfoDialog";
@@ -215,6 +216,11 @@ const setPage = useFiltersStore((s) => s.setPage);
                 {ready && activeKey === "author" && (
                   <ViewWrap key="author">
                     <AuthorView />
+                  </ViewWrap>
+                )}
+                {ready && activeKey === "sync" && (
+                  <ViewWrap key="sync">
+                    <SyncView />
                   </ViewWrap>
                 )}
               </AnimatePresence>

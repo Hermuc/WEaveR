@@ -92,11 +92,24 @@ pub fn run() {
             arc_state.init_cookies();
             // Don't start .NET Runtime check here - let frontend trigger it
             // arc_state.init_dotnet_runtime();
+            let sync_settings_before_manage = arc_state.settings.clone();
+            let sync_data_dir_before_manage = arc_state.app_data_dir.clone();
             app.manage(arc_state);
 
             // Streams live outside AppState so they can be torn down
             // independently and survive account refreshes.
             app.manage(Arc::new(commands::video_stream::StreamRegistry::new()));
+            // Phone sync engine: owns its worker thread, fed by the we-sync
+            // crate; settings are stored under the "sync" key.
+            let sync_settings = sync_settings_before_manage;
+            let sync_data_dir = sync_data_dir_before_manage;
+            let sync = Arc::new(services::sync::SyncService::new(
+                app.handle().clone(),
+                sync_settings,
+                sync_data_dir,
+            ));
+            app.manage(sync.clone());
+            sync.auto_start();
             // Watchdog: if the main window ever disappears without going
             // through CloseRequested, still terminate the process tree.
             crate::core::shutdown::install_watchdog(app.handle().clone());
@@ -193,6 +206,14 @@ pub fn run() {
             commands::video_stream::video_stream_status,
             commands::video_stream::video_stream_stop,
             commands::video_stream::video_stream_stop_all,
+            commands::sync::sync_config_get,
+            commands::sync::sync_config_set,
+            commands::sync::sync_now,
+            commands::sync::sync_pause,
+            commands::sync::sync_start,
+            commands::sync::sync_status,
+            commands::sync::sync_stop,
+            commands::sync::sync_transfer_pause,
         ]);
 
     builder

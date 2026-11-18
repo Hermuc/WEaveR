@@ -46,6 +46,11 @@ pub fn request(app: &AppHandle, reason: &str) {
         registry.shutdown_all();
     }
 
+    // 1b. Stop the phone sync engine (saves its state before exiting).
+    if let Some(sync) = app.try_state::<std::sync::Arc<crate::services::sync::SyncService>>() {
+        sync.stop();
+    }
+
     // 2. Persist the window geometry from the backend. The frontend also has a
     //    debounced saver, but a hard exit can land before that debounce fires.
     save_window_geometry(app);

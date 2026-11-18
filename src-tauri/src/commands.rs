@@ -10,6 +10,7 @@ pub mod logging;
 pub mod metadata;
 pub mod plugins;
 pub mod steam;
+pub mod sync;
 pub mod translator;
 pub mod updater;
 pub mod video_stream;

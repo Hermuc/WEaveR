@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Added
+- **phone sync:** Integrated WE-Sync (MTP/ADB) into WEaveR: a Sync page with device status, progress, stats and log, plus a Settings → Sync tab; the engine runs in-process through the we-sync crate (default-features = false) and is stopped by the shutdown coordinator.
 - **i18n:** Simplified Chinese (zh) interface localization.
 - **i18n:** First-launch language detection now prefers the operating system locale (via `tauri-plugin-os`), then browser preferences, falling back to English. Detection logic lives in the pure, unit-tested `src/i18n/system-language.ts`.
 - **i18n:** `src/i18n/languages.ts` is the single registry of supported locales — adding a language only requires a locale file, one registry entry, and the matching backend entry in `src-tauri/src/services/i18n.rs`.

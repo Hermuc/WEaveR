@@ -9,6 +9,7 @@ import HotkeysSettings from "@/components/settings/HotkeysSettings";
 import GeneralSettingsTab from "@/components/settings/GeneralSettingsTab";
 import AccountsSettingsTab from "@/components/settings/AccountsSettingsTab";
 import VideoSettingsTab from "@/components/settings/VideoSettingsTab";
+import SyncSettingsTab from "@/components/settings/SyncSettingsTab";
 import { inTauri, tryInvoke } from "@/lib/tauri";
 import { useAppStore } from "@/stores/app";
 
@@ -66,6 +67,11 @@ export default function SettingsDialog({ open, onOpenChange }: Props) {
             value: "video",
             label: t("settings.video") || "Video",
             content: <VideoSettingsTab />,
+          },
+          {
+            value: "sync",
+            label: t("settings.sync") || "Sync",
+            content: <SyncSettingsTab />,
           },
           {
             value: "hotkeys",

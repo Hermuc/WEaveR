@@ -9,6 +9,7 @@ import {
   FolderHeart,
   Globe,
   Layers,
+  Smartphone,
   Loader2,
   PanelLeftClose,
   PanelLeftOpen,
@@ -23,7 +24,7 @@ import {
 } from "@/stores/steam-session";
 import AppIcon from "@/components/common/AppIcon";
 
-export type NavKey = "workshop" | "collections" | "installed";
+export type NavKey = "workshop" | "collections" | "installed" | "sync";
 
 interface SidebarProps {
   current: NavKey;
@@ -34,6 +35,7 @@ const NAV: { key: NavKey; icon: typeof Globe; labelKey: string }[] = [
   { key: "workshop", icon: Globe, labelKey: "tabs.workshop" },
   { key: "collections", icon: Layers, labelKey: "tabs.collections" },
   { key: "installed", icon: FolderHeart, labelKey: "tabs.wallpapers" },
+  { key: "sync", icon: Smartphone, labelKey: "tabs.sync" },
 ];
 
 export default function Sidebar({ current, onChange }: SidebarProps) {
