@@ -8,6 +8,7 @@ import ParserDebugDialog from "@/components/dialogs/ParserDebugDialog";
 import HotkeysSettings from "@/components/settings/HotkeysSettings";
 import GeneralSettingsTab from "@/components/settings/GeneralSettingsTab";
 import AccountsSettingsTab from "@/components/settings/AccountsSettingsTab";
+import VideoSettingsTab from "@/components/settings/VideoSettingsTab";
 import { inTauri, tryInvoke } from "@/lib/tauri";
 import { useAppStore } from "@/stores/app";
 
@@ -60,6 +61,11 @@ export default function SettingsDialog({ open, onOpenChange }: Props) {
             content: (
               <AccountsSettingsTab onOpenParser={() => setDebugOpen(true)} />
             ),
+          },
+          {
+            value: "video",
+            label: t("settings.video") || "Video",
+            content: <VideoSettingsTab />,
           },
           {
             value: "hotkeys",

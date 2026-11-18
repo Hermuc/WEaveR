@@ -131,3 +131,77 @@ pub fn prune(max_bytes: u64); // 按 mtime 淘汰，启动/阈值触发
 | mpv/VLC 缓存参数 | ✅ | mpv 256 MiB/64 MiB；VLC 3s |
 | 磁盘 chunk 缓存 | ✅ | 实测 `%LOCALAPPDATA%\WEave\video-cache\3838500850\...` 7×1 MiB |
 | 测试 | ✅ | Rust 136；clippy `-D warnings` 0 |
+
+## 八、P0 / P1 实施（2026-11-18）
+
+### 调研结论
+
+| 项目 | 结论 |
+|---|---|
+| `psyattack/WEave`（原版 Python） | 纯下载管理器，没有「边下边看」；无可复用实现 |
+| `SteamAutoCracks/WallpaperEngineWorkshopDownloader` | 全量下载，无流式 |
+| `mpv-ipc` / `mpvipc` crate | 可控制已运行的 mpv（播放状态/IPC），本轮不需要 |
+| `get-air/tauri-video-plugin` | 内置 GStreamer/libmpv 的 Tauri 播放器；属「内置播放器」方向，体积/平台成本高，不采用 |
+| qBittorrent / TorrServer / Jellyfin | HTTP byte-serving 模式，WEaveR 已采用 |
+
+**结论：没有可直接复用的成品「WEaveR 边下边放」实现；本轮不引入新依赖。**
+
+### P0（正确性 / 省流）
+
+| 项 | 实现 |
+|---|---|
+| 只对视频壁纸 prewarm | `isVideoItem()` 判断 tags（`Video`/`视频`/`動画`/`影片`/`movie`，兼容 string 与 {tag,category}）。**注意：browse 列表项不带 tags**，所以同时检查列表项与详情页 `meta.tags`；`DetailsSidebar` 仅在视频且未安装时调用 `prewarmVideoStream` |
+| 只对视频壁纸显示「边下边看」 | `DetailsActionButtons` 加 `isVideoItem(item)` 条件 |
+| 已安装的壁纸不走流 | `installedHandle` 存在时隐藏「边下边看」；`DetailsSidebar` 已安装不 prewarm |
+
+### P1（体验）
+
+| 项 | 实现 |
+|---|---|
+| 前端接 `video_stream_status` | `getVideoStreamStatus()`；`useWatchWhileDownloading` 点击时先查 status，`failed` 直接显示原因，`pending` 显示「正在准备视频…」 |
+| 播放器设置 | `SettingsService` 的 `video_stream.player_path`；`video_player::detect_with(preferred)`；设置页「视频」tab 可浏览/输入路径并显示检测结果 |
+| 缓存管理 | `disk_cache::stats()/clear()`（只删 `.bin`，保留目录）+ `video_stream_cache_stats`/`video_stream_cache_clear` 命令；设置页显示文件数/占用并支持清理 |
+| 播放后引导「装为壁纸」 | `WatchState.startedId` 按 item 匹配，按钮下方提示「正在外部播放器播放；喜欢可点『装壁纸』保存到本地」 |
+
+### 验证
+
+- 前端：**160 passed**（新增 `isVideoItem` 3 个 + `DetailsActionButtons` 3 个），typecheck / lint 0。
+- Rust：**136 passed**，clippy `-D warnings` 0。
+## 八、端点健康池（2026-11-18）
+
+### 问题（实测）
+
+- 单流播放时 CDN ESTABLISHED 连接 44–81 个；
+- 多个 CDN IP 的 TCP 连接卡在 SYN_SENT（对端不响应）；
+- 网络长时间 0–10 KB/s，偶发 8–9 MB/s 爆发；一次卡顿持续 2 分 40 秒；
+- 旧实现：每个 chunk 同时向所有 endpoint 发完整请求（select_all），probe 每个 prewarm 都并发探测所有 host；fetch_chunk 每次尝试 60s、chunk_at 重试 3 次 → 最坏 180s。
+
+### 设计
+
+新增 `services/video_stream/endpoint_pool.rs`：
+
+| 项 | 值 |
+|---|---|
+| 每 chunk 最多尝试 host 数 | 2（MAX_ATTEMPTS） |
+| 单次请求超时 | 10s（CHUNK_REQUEST_TIMEOUT） |
+| 失败冷却 | 30s（FAILURE_COOLDOWN） |
+| 排序 | 非冷却 > 失败次数少 > 平均延迟低 |
+| chunk_at 重试 | 2 次（原 3 次） |
+
+- fetch_chunk 改为顺序尝试 2 个候选 host，不再对全部 endpoint 竞速；
+- 删除 per-prewarm 的全量 endpoint probe（保留全部 endpoint + token 优先排序）；
+- HTTP 连接池 pool_max_idle_per_host(2)，避免 idle 连接堆积；
+- 移除 ResolvedVideo.preferred，由 EndpointPool 统一记录成功/失败/延迟。
+
+### 验证
+
+- Rust：141 passed（新增 5 个 endpoint_pool 测试），clippy -D warnings 0；
+- 播放实测：待重新构建后复测（目标：单流连接数从 44–81 降到约 12–20，卡顿空窗消失）。
+
+### 后续实测（2026-11-18 16:25-16:28）
+
+- 25s 超时 + token 过滤后，单流连接数约 21-47（旧版 44-81），但播放仍卡在首帧；
+- 日志：所有 CDN host 的 chunk 请求 `error sending request` / `timed out after 25s` / `HTTP 403`；
+- curl 实测：`st.dl.eccdnx.com` 的 chunk URL 返回 302，跟随 302 后 30s 无响应；`xz.pphimalayanrt.com` 返回 302（无 Location）；`dl.steam.clngaa.com` 返回 403；IPv6 全部失败；
+- 结论：**当前网络到 Steam CDN 节点不可用/极不稳定**，不是线程数或本地代码能解决；
+- 代码侧追加：chunk HTTP client 禁用重定向跟随（302 快速失败换 host），CDN server 列表从 5 个增加到 16 个。

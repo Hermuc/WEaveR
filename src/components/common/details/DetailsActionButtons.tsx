@@ -21,6 +21,7 @@ import { useConfirm } from "@/hooks/useConfirm";
 import { Tooltip } from "@/components/common/Tooltip";
 import { Meta } from "@/hooks/useDetailsMeta";
 import { InstalledWallpaper, WorkshopItem } from "@/types/workshop";
+import { isVideoItem } from "@/lib/videoStream";
 
 interface DetailsActionButtonsProps {
   kind: "workshop" | "installed";
@@ -40,7 +41,12 @@ interface DetailsActionButtonsProps {
   /// Progress/error state for the watch button, so it can show a spinner.
   /// Toasts are suppressed while this panel is open, so the button is the only
   /// place feedback can appear.
-  watchState?: { pendingId: string | null; error: string | null };
+  watchState?: {
+    pendingId: string | null;
+    error: string | null;
+    preparing?: boolean;
+    startedId?: string | null;
+  };
   onApply?: (item: InstalledWallpaper) => void;
   onExtract?: (item: InstalledWallpaper) => void;
   onDelete?: (item: InstalledWallpaper) => void;
@@ -250,7 +256,11 @@ export default function DetailsActionButtons({
         {/* Video wallpapers can be streamed to an external player while the
             download is still running, so the user does not wait for the whole
             file. Only shown when the caller supplies a handler. */}
-        {kind === "workshop" && onWatch && (() => {
+        {kind === "workshop" &&
+          onWatch &&
+          !installedHandle &&
+          (isVideoItem(item as WorkshopItem) || isVideoItem({ tags: meta.tags })) &&
+          (() => {
           const itemId = item ? (item as WorkshopItem).pubfileid : null;
           const busy = !!watchState?.pendingId && watchState.pendingId === itemId;
           return (
@@ -267,7 +277,9 @@ export default function DetailsActionButtons({
                 {busy ? (
                   <>
                     <span className="inline-block size-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
-                    {t("messages.streaming_starting")}
+                    {watchState?.preparing
+                      ? t("messages.streaming_preparing")
+                      : t("messages.streaming_starting")}
                   </>
                 ) : (
                   <>
@@ -279,6 +291,11 @@ export default function DetailsActionButtons({
               {watchState?.error && (
                 <p className="text-[11px] leading-relaxed text-red-500">
                   {watchState.error}
+                </p>
+              )}
+              {watchState?.startedId === itemId && !busy && (
+                <p className="text-[11px] leading-relaxed text-muted">
+                  {t("messages.streaming_started_hint")}
                 </p>
               )}
             </div>

@@ -8,6 +8,8 @@
 - **i18n:** `src/i18n/languages.ts` is the single registry of supported locales — adding a language only requires a locale file, one registry entry, and the matching backend entry in `src-tauri/src/services/i18n.rs`.
 
 ### Changed
+- **video-stream:** Chunk fetches now go through a per-endpoint health pool: at most 2 hosts per chunk, 10s per request, failed hosts cooling down for 30s. The previous behaviour raced every CDN host for every chunk (44-81 connections per stream, many stuck in SYN_SENT) and could stall a chunk for 60s x 3 retries. Probe fan-out was removed and idle connections are capped at 2 per host.
+- **video-stream:** P0/P1 polish: prewarm and the "watch while downloading" button now only apply to video wallpapers (tag-based, no wasted CM logins for scene wallpapers); installed items skip streaming; the button reports preparing/failed states from `video_stream_status`; a "Video" settings tab manages the external player path and the on-disk chunk cache; a post-launch hint points at the Install button.
 - **video-stream:** 边下边看 now has a prewarm state machine (pending/ready/failed) and `video_stream_start` waits for an in-flight prewarm instead of resolving the same item twice. The player process is tracked: closing mpv/VLC stops the range server and its prefetcher. mpv/VLC get larger stream caches (256 MiB forward / 64 MiB back; VLC 3 s network cache). Watched chunks are persisted under `%LOCALAPPDATA%\WEave\video-cache` (4 GiB cap, oldest-first pruning), so replaying an item reuses what was already downloaded.
 - **i18n:** Replaced hard-coded `isRu` Russian/English branches in the Workshop search-options popover with real translation keys.
 - **video-stream:** 边下边看 now reuses WEave's own saved Steam session refresh token before falling back to the local Steam-client token or a password login. Accounts with Steam Guard previously hit `STEAM_GUARD_REQUIRED` even though the main app was signed in.
@@ -15,6 +17,7 @@
 - **docs:** README now defaults to Simplified Chinese (`README.md`); the English version moved to `README.en.md`. All cross-links between the three READMEs updated.
 
 ### Fixed
+- **shutdown:** Every close path (custom title bar, Alt+F4, taskbar close, watchdog) now goes through one idempotent shutdown coordinator: it stops video streams, kills the external mpv/VLC processes, saves window geometry, destroys every webview (including the hidden steam-webview), and hard-exits after 800 ms. Previously Alt+F4/taskbar close left the hidden webview and the process alive, and video players survived closing the app.
 - **i18n:** Added the missing `labels.extract_prefix` key to the Russian bundle (present in English, absent in Russian upstream).
 - **steam-session:** Persist and refresh the Steam session so a login survives restarts. The stored `refresh_token` is now used to mint a fresh access token when the old one expires; a three-state probe (`signed_in`/`signed_out`/`unknown`) stops network failures from being reported as a logout; `steam_restore_session` verifies the rebuilt `steamLoginSecure` cookie against `steamcommunity.com/my/` before claiming success; the stale-cookie early return in `auto_login` (which made "auto login" report success while the Workshop stayed anonymous) is gone. Design and P0 measurements live in `docs/STEAM-SESSION.md`.
 

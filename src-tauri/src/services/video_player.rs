@@ -58,6 +58,32 @@ fn extra_dirs() -> Vec<PathBuf> {
     dirs
 }
 
+/// Find a player, preferring an explicitly configured executable.
+///
+/// The settings path lets portable installs work without putting mpv/VLC on
+/// PATH. When the configured file is missing we fall back to auto-detection so
+/// a stale setting cannot make streaming impossible.
+pub fn detect_with(preferred: Option<&str>) -> Option<Player> {
+    if let Some(raw) = preferred.map(str::trim).filter(|value| !value.is_empty()) {
+        let path = std::path::PathBuf::from(raw);
+        if path.is_file() {
+            let name = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            let kind = if name.contains("vlc") {
+                PlayerKind::Vlc
+            } else {
+                PlayerKind::Mpv
+            };
+            return Some(Player { kind, path });
+        }
+        log::warn!("[video-stream] configured player does not exist: {raw}");
+    }
+    detect()
+}
+
 /// Find the best available player.
 ///
 /// Order: PATH first (so a user-installed shim wins), then the extra dirs.

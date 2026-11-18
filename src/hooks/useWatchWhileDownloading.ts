@@ -1,7 +1,7 @@
 import { useCallback, useState } from "react";
 import { useTranslation } from "@/i18n/hooks";
 import { pushToast } from "@/stores/toasts";
-import { startVideoStream } from "@/lib/videoStream";
+import { getVideoStreamStatus, startVideoStream } from "@/lib/videoStream";
 import type { WorkshopItem } from "@/types/workshop";
 
 export interface WatchState {
@@ -9,6 +9,10 @@ export interface WatchState {
   pendingId: string | null;
   /** Last error message for inline display, cleared on the next attempt. */
   error: string | null;
+  /** True while the backend is still resolving/preparing the video. */
+  preparing: boolean;
+  /** Item id whose player launched, so the hint only shows for that item. */
+  startedId: string | null;
 }
 
 /**
@@ -27,21 +31,46 @@ export function useWatchWhileDownloading(): {
   state: WatchState;
 } {
   const { t } = useTranslation();
-  const [state, setState] = useState<WatchState>({ pendingId: null, error: null });
+  const [state, setState] = useState<WatchState>({
+    pendingId: null,
+    error: null,
+    preparing: false,
+    startedId: null,
+  });
 
   const watch = useCallback(
     async (item: WorkshopItem) => {
       // Collections have no single video to stream.
       if (item.is_collection) return;
 
-      setState({ pendingId: item.pubfileid, error: null });
+      setState({ pendingId: item.pubfileid, error: null, preparing: true, startedId: null });
       try {
-        await startVideoStream(item.pubfileid);
-        setState({ pendingId: null, error: null });
+        // Surface a prewarm failure immediately instead of waiting for the
+        // start command to re-resolve the item and fail with a generic string.
+        const status = await getVideoStreamStatus(item.pubfileid).catch(() => null);
+        if (status?.state === "failed") {
+          setState({
+            pendingId: null,
+            error: t("messages.streaming_failed", {
+              error: status.error || "prewarm failed",
+            }),
+            preparing: false,
+            startedId: null,
+          });
+          return;
+        }
+
+        const started = await startVideoStream(item.pubfileid);
+        setState({
+          pendingId: null,
+          error: null,
+          preparing: false,
+          startedId: item.pubfileid,
+        });
         // Success toast also works when the panel closes (detailsOpen false by
         // then), so the user still gets confirmation.
         pushToast(
-          t("messages.streaming_started", { player: "mpv" }),
+          t("messages.streaming_started", { player: started.player }),
           "success",
         );
       } catch (err) {
@@ -54,7 +83,7 @@ export function useWatchWhileDownloading(): {
         } else {
           msg = t("messages.streaming_failed", { error: raw });
         }
-        setState({ pendingId: null, error: msg });
+        setState({ pendingId: null, error: msg, preparing: false, startedId: null });
       }
     },
     [t],

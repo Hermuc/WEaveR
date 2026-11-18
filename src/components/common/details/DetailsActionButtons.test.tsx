@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { render, fireEvent, screen } from "@testing-library/react";
 import DetailsActionButtons from "./DetailsActionButtons";
 import { Meta } from "@/hooks/useDetailsMeta";
-import { WorkshopItem } from "@/types/workshop";
+import { InstalledWallpaper, WorkshopItem } from "@/types/workshop";
 
 vi.mock("@/lib/tauri", () => ({
   inTauri: false,
@@ -84,6 +84,75 @@ describe("DetailsActionButtons", () => {
       <DetailsActionButtons {...baseProps} meta={meta({ is_collection: true })} />,
     );
     expect(screen.getByText("Install wallpaper").closest("button")).toBeDisabled();
+  });
+
+  it("shows the watch button only for video wallpapers", () => {
+    const videoItem: WorkshopItem = {
+      ...item,
+      pubfileid: "43",
+      tags: [{ tag: "Video", category: "Type" }],
+    };
+    render(
+      <DetailsActionButtons
+        {...baseProps}
+        item={videoItem}
+        meta={meta({ pubfileid: "43" })}
+        onWatch={vi.fn()}
+      />,
+    );
+    expect(screen.getByText("Watch while downloading")).toBeInTheDocument();
+  });
+
+  it("shows the watch button when only the details metadata has the Video tag", () => {
+    // Browse tiles do not carry tags; the details fetch supplies them.
+    render(
+      <DetailsActionButtons
+        {...baseProps}
+        meta={meta({ tags: [{ tag: "Video", category: "Type" }] })}
+        onWatch={vi.fn()}
+      />,
+    );
+    expect(screen.getByText("Watch while downloading")).toBeInTheDocument();
+  });
+
+  it("hides the watch button for non-video wallpapers", () => {
+    render(
+      <DetailsActionButtons {...baseProps} meta={meta()} onWatch={vi.fn()} />,
+    );
+    expect(screen.queryByText("Watch while downloading")).not.toBeInTheDocument();
+  });
+
+  it("hides the watch button for an installed item", () => {
+    const installed = {
+      pubfileid: "43",
+      folder: "",
+      project_json_path: "",
+      has_pkg: false,
+      title: "",
+      preview: "",
+      description: "",
+      file_type: "",
+      tags: [],
+      content_rating: "",
+      size_bytes: 0,
+      installed_ts: 0,
+      source: "myprojects",
+    } as InstalledWallpaper;
+    const videoItem: WorkshopItem = {
+      ...item,
+      pubfileid: "43",
+      tags: [{ tag: "Video", category: "Type" }],
+    };
+    render(
+      <DetailsActionButtons
+        {...baseProps}
+        item={videoItem}
+        installedEntry={installed}
+        meta={meta({ pubfileid: "43" })}
+        onWatch={vi.fn()}
+      />,
+    );
+    expect(screen.queryByText("Watch while downloading")).not.toBeInTheDocument();
   });
 
   it("keeps a harmless install button when no item is selected", () => {

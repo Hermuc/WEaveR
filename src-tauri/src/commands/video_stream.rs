@@ -30,6 +30,8 @@ enum PrewarmState {
 #[derive(Default)]
 pub struct StreamRegistry {
     servers: Mutex<std::collections::HashMap<u64, VideoServer>>,
+    /// External players started for this stream, so shutdown can kill them.
+    players: Mutex<std::collections::HashMap<u64, Arc<Mutex<Option<std::process::Child>>>>>,
     ready: Mutex<ReadyMap>,
     /// Prewarm lifecycle per item. This replaces the old "pending set" so the
     /// UI can distinguish "still resolving", "ready" and "failed with a reason"
@@ -40,6 +42,27 @@ pub struct StreamRegistry {
 impl StreamRegistry {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Stop every range server and kill every external player.
+    ///
+    /// Called from the shutdown coordinator before destroying the windows; it
+    /// must be safe to call more than once and on an empty registry.
+    pub fn shutdown_all(&self) {
+        {
+            let mut servers = self.servers.lock();
+            for (_, mut server) in servers.drain() {
+                server.stop();
+            }
+        }
+        {
+            let mut players = self.players.lock();
+            for (_, child) in players.drain() {
+                if let Some(mut child) = child.lock().take() {
+                    let _ = child.kill();
+                }
+            }
+        }
     }
 }
 
@@ -65,13 +88,31 @@ pub struct StreamStarted {
     pub player: String,
 }
 
-/// Report the detected external player, if any.
+/// Report the detected external player, if any. A configured path wins over
+/// auto-detection; a stale path falls back to the usual PATH scan.
 #[tauri::command]
-pub fn video_stream_player() -> Option<PlayerInfo> {
-    video_player::detect().map(|p| PlayerInfo {
+pub fn video_stream_player(state: AppStateHandle<'_>) -> Option<PlayerInfo> {
+    let preferred = state
+        .settings
+        .read()
+        .get("video_stream.player_path")
+        .and_then(|value| value.as_str().map(str::to_owned));
+    video_player::detect_with(preferred.as_deref()).map(|p| PlayerInfo {
         name: p.kind.name().to_string(),
         path: p.path.to_string_lossy().to_string(),
     })
+}
+
+/// Report video-cache usage for the settings dialog.
+#[tauri::command]
+pub fn video_stream_cache_stats() -> video_stream::VideoCacheStats {
+    video_stream::cache_stats()
+}
+
+/// Remove every cached chunk (keeps the directory structure).
+#[tauri::command]
+pub fn video_stream_cache_clear() -> Result<(), String> {
+    video_stream::clear_cache().map_err(|e| e.to_string())
 }
 
 /// Resolve a video in the background and cache it, so a later "watch" click is
@@ -275,18 +316,37 @@ pub async fn video_stream_start(
         .map_err(|e| e.to_string())?;
     let url = server.url();
     let port = server.port;
-    let mut child = video_player::launch(&player, &url).map_err(|e| format!("launch failed: {e}"))?;
+    let child = Arc::new(Mutex::new(Some(
+        video_player::launch(&player, &url).map_err(|e| format!("launch failed: {e}"))?,
+    )));
     let player_name = player.kind.name().to_string();
     registry.servers.lock().insert(item_id, server);
+    registry.players.lock().insert(item_id, child.clone());
 
     // The player owns the WebView-like lifecycle now: when mpv/VLC exits, stop
     // the range server so its prefetcher stops downloading the rest of the file
     // in the background. Match on port so a re-click (which replaced the server)
     // cannot stop the newer stream by accident.
     let registry_for_wait = registry.inner().clone();
+    let child_for_wait = child.clone();
+    let child_for_cleanup = child.clone();
     tauri::async_runtime::spawn(async move {
-        let status = tokio::task::spawn_blocking(move || child.wait()).await;
+        let status = tokio::task::spawn_blocking(move || {
+            let mut guard = child_for_wait.lock();
+            guard.take().map(|mut child| child.wait())
+        })
+        .await;
         log::info!("[video-stream] player exited for {item_id}: {status:?}");
+        {
+            let mut players = registry_for_wait.players.lock();
+            let same = players
+                .get(&item_id)
+                .map(|entry| std::sync::Arc::ptr_eq(entry, &child_for_cleanup))
+                .unwrap_or(false);
+            if same {
+                players.remove(&item_id);
+            }
+        }
         let mut servers = registry_for_wait.servers.lock();
         if servers.get(&item_id).map(|s| s.port) == Some(port) {
             if let Some(mut s) = servers.remove(&item_id) {
@@ -308,23 +368,40 @@ pub async fn video_stream_start(
 /// Stop the stream for one item.
 #[tauri::command]
 pub fn video_stream_stop(registry: State<'_, Arc<StreamRegistry>>, item_id: u64) -> bool {
-    let mut servers = registry.servers.lock();
-    match servers.remove(&item_id) {
-        Some(mut s) => {
-            s.stop();
-            true
+    let stopped = {
+        let mut servers = registry.servers.lock();
+        match servers.remove(&item_id) {
+            Some(mut s) => {
+                s.stop();
+                true
+            }
+            None => false,
         }
-        None => false,
+    };
+    if let Some(child) = registry.players.lock().remove(&item_id) {
+        if let Some(mut child) = child.lock().take() {
+            let _ = child.kill();
+        }
     }
+    stopped
 }
 
 /// Stop every running stream (used on shutdown).
 #[tauri::command]
 pub fn video_stream_stop_all(registry: State<'_, Arc<StreamRegistry>>) -> usize {
-    let mut servers = registry.servers.lock();
-    let n = servers.len();
-    for (_, mut s) in servers.drain() {
-        s.stop();
+    let n = {
+        let mut servers = registry.servers.lock();
+        let n = servers.len();
+        for (_, mut s) in servers.drain() {
+            s.stop();
+        }
+        n
+    };
+    let mut players = registry.players.lock();
+    for (_, child) in players.drain() {
+        if let Some(mut child) = child.lock().take() {
+            let _ = child.kill();
+        }
     }
     n
 }

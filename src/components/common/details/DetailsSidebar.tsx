@@ -17,7 +17,7 @@ import { Tooltip } from "@/components/common/Tooltip";
 import { useAppStore } from "@/stores/app";
 import { dismissAllToasts } from "@/stores/toasts";
 import { inTauri, tryInvoke } from "@/lib/tauri";
-import { prewarmVideoStream } from "@/lib/videoStream";
+import { isVideoItem, prewarmVideoStream } from "@/lib/videoStream";
 
 type DetailsSidebarProps = WorkshopProps | InstalledProps;
 
@@ -54,15 +54,14 @@ export default function DetailsSidebar(props: DetailsSidebarProps) {
   const hasItem = !!props.item;
   const [showSettings, setShowSettings] = useState(false);
 
-  // Start resolving the video in the background as soon as a workshop item's
+  // Start resolving the video in the background as soon as a video wallpaper's
   // details open, so clicking "watch while downloading" is near-instant.
+  // Non-video items must not prewarm: resolving them only wastes a CM login +
+  // manifest round-trip and ends in "not a video wallpaper".
   const workshopItemId =
     props.kind === "workshop" && props.item && !props.item.is_collection
       ? props.item.pubfileid
       : null;
-  useEffect(() => {
-    if (workshopItemId && inTauri) void prewarmVideoStream(workshopItemId);
-  }, [workshopItemId]);
   
   // Track previous hasItem to detect when drawer opens
   const [prevHasItem, setPrevHasItem] = useState(hasItem);
@@ -107,7 +106,23 @@ export default function DetailsSidebar(props: DetailsSidebarProps) {
   });
 
   const [lastInstalled, setLastInstalled] = useState<InstalledWallpaper | null>(null);
-  
+
+  // Prewarm only video wallpapers that are not installed yet. Installed items
+  // already have local files, so streaming them from Steam would be pointless
+  // network work.
+  // Browse-page items do not carry tags (the tile markup has none); the
+  // authoritative tags arrive with the details metadata. Check both so a
+  // list item with an empty tag array still prewarms once the metadata lands.
+  const shouldPrewarmVideo =
+    !!workshopItemId &&
+    !installedEntry &&
+    (isVideoItem(props.item) || isVideoItem({ tags: meta?.tags }));
+  useEffect(() => {
+    if (workshopItemId && shouldPrewarmVideo && inTauri) {
+      void prewarmVideoStream(workshopItemId);
+    }
+  }, [workshopItemId, shouldPrewarmVideo]);
+
   const currentInstalled = installedEntry 
     ? installedEntry 
     : (props.kind === "installed" && props.item ? (props.item as InstalledWallpaper) : null);

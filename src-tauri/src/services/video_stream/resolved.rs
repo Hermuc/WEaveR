@@ -6,18 +6,26 @@
 
 use std::sync::Arc;
 
+use std::time::Duration;
+
 use super::manifest::parse_chunk_id;
 use super::{ChunkSpan, ResolvedVideo, CACHE_SPIN_WAIT};
 
 
+/// Hard deadline for one chunk request. 1 MiB on a working CDN is ~1s, but
+/// this network measured healthy hosts taking 15-30s under load; 10s killed
+/// requests that would have succeeded and made playback worse. 25s is the
+/// observed upper bound for a usable chunk.
+const CHUNK_REQUEST_TIMEOUT: Duration = Duration::from_secs(25);
+
 impl ResolvedVideo {
     /// Fetch, decrypt and decompress one chunk.
     ///
-    /// All endpoints are raced concurrently and the first complete response wins.
-    /// Endpoint speeds on this network differ by orders of magnitude (measured
-    /// 217ms, 57s and a 90s timeout for the same request), so trying them one at
-    /// a time made a single 1MB chunk take 80s. Racing them means the chunk costs
-    /// as much as the fastest host, not the sum of the slow ones.
+    /// The endpoint pool ranks hosts by observed health and returns at most
+    /// MAX_ATTEMPTS candidates. We try them sequentially with a hard per-request
+    /// deadline; this replaced racing every endpoint, which produced 44-81
+    /// simultaneous connections per stream (many stuck in SYN_SENT) and let one
+    /// chunk occupy the full 60s timeout.
     async fn fetch_chunk(&self, span: &ChunkSpan) -> anyhow::Result<Vec<u8>> {
         let _ = parse_chunk_id(&span.chunk_id)?;
 
@@ -35,18 +43,38 @@ impl ResolvedVideo {
             return Err(anyhow::anyhow!("no CDN endpoints"));
         }
 
-        // Try the last-known-good endpoint first, then everything else, all at once.
-        let preferred_idx = self.preferred.load(std::sync::atomic::Ordering::Relaxed);
-        let mut order: Vec<usize> = (0..self.endpoints.len()).collect();
-        if preferred_idx < order.len() {
-            order.swap(0, preferred_idx);
+        let all_candidates = self
+            .pool
+            .lock()
+            .candidates(std::time::Instant::now());
+        // Prefer hosts that actually received a CDN token; a token-less host
+        // answers 403 (or hangs) and must not consume one of the two slots
+        // unless there is nothing else left.
+        let mut candidates: Vec<usize> = all_candidates
+            .iter()
+            .copied()
+            .filter(|&idx| {
+                self.endpoints
+                    .get(idx)
+                    .map(|ep| ep.token.is_some())
+                    .unwrap_or(false)
+            })
+            .collect();
+        if candidates.is_empty() {
+            candidates = all_candidates;
+        }
+        if candidates.is_empty() {
+            return Err(anyhow::anyhow!("no endpoint candidates"));
         }
 
+        // Race at most two healthy candidates, not the whole endpoint list.
+        // Racing two keeps the chunk cost at one timeout when both are slow
+        // while keeping the per-stream connection count bounded (2 x 12).
         use futures_util::future::FutureExt;
-        let mut futs: Vec<_> = order
+        let mut futs: Vec<_> = candidates
             .into_iter()
-            .map(|idx| {
-                let ep = &self.endpoints[idx];
+            .filter_map(|idx| {
+                let ep = self.endpoints.get(idx)?.clone();
                 let url = format!(
                     "{}/depot/{}/chunk/{}{}",
                     ep.base,
@@ -58,38 +86,66 @@ impl ResolvedVideo {
                 let key = self.depot_key.clone();
                 let len = span.len as u32;
                 let sum = span.checksum;
-                async move {
-                    let resp = http.get(&url).send().await.ok()?;
-                    if !resp.status().is_success() {
-                        return None;
+                Some(
+                    async move {
+                        let started = std::time::Instant::now();
+                        let result = tokio::time::timeout(CHUNK_REQUEST_TIMEOUT, async {
+                            let resp = http.get(&url).send().await?;
+                            if !resp.status().is_success() {
+                                return Err(anyhow::anyhow!("HTTP {}", resp.status()));
+                            }
+                            let body = resp.bytes().await?;
+                            steamroom::depot::chunk::process_chunk(&body, &key, len, sum)
+                                .map_err(|e| anyhow::anyhow!("process chunk: {e}"))
+                        })
+                        .await;
+                        (idx, ep, started, result)
                     }
-                    let body = resp.bytes().await.ok()?;
-                    let out = steamroom::depot::chunk::process_chunk(&body, &key, len, sum).ok()?;
-                    Some((idx, out))
-                }
-                .boxed()
+                    .boxed(),
+                )
             })
             .collect();
 
         let mut last_err = String::from("all endpoints failed");
         while !futs.is_empty() {
-            let (res, _i, rest) = futures_util::future::select_all(futs).await;
+            let ((idx, ep, started, result), _i, rest) =
+                futures_util::future::select_all(futs).await;
             futs = rest;
-            if let Some((idx, out)) = res {
-                self.preferred
-                    .store(idx, std::sync::atomic::Ordering::Relaxed);
-                if let Err(e) = super::disk_cache::store(
-                    self.info.item_id,
-                    self.info.manifest_id,
-                    &span.chunk_id,
-                    &out,
-                ) {
-                    log::debug!("[video-cache] store failed for chunk {}: {e}", span.chunk_id);
+            match result {
+                Ok(Ok(out)) => {
+                    self.pool.lock().mark_success(idx, started.elapsed());
+                    if let Err(e) = super::disk_cache::store(
+                        self.info.item_id,
+                        self.info.manifest_id,
+                        &span.chunk_id,
+                        &out,
+                    ) {
+                        log::debug!("[video-cache] store failed for chunk {}: {e}", span.chunk_id);
+                    }
+                    return Ok(out);
                 }
-                return Ok(out);
+                Ok(Err(e)) => {
+                    self.pool.lock().mark_failure(idx);
+                    log::warn!(
+                        "[video-stream] chunk {} host {} failed: {e}",
+                        span.chunk_id,
+                        ep.base
+                    );
+                    last_err = format!("chunk {} failed on {}", span.chunk_id, ep.base);
+                }
+                Err(_) => {
+                    self.pool.lock().mark_failure(idx);
+                    log::warn!(
+                        "[video-stream] chunk {} host {} timed out after {:?}",
+                        span.chunk_id,
+                        ep.base,
+                        CHUNK_REQUEST_TIMEOUT
+                    );
+                    last_err = format!("chunk {} timed out on {}", span.chunk_id, ep.base);
+                }
             }
-            last_err = format!("chunk {} failed on a host", span.chunk_id);
         }
+
         Err(anyhow::anyhow!("{last_err}"))
     }
 
@@ -184,7 +240,7 @@ impl ResolvedVideo {
         let mut last_err = None;
         let result = {
             let mut out = None;
-            for attempt in 0..3u32 {
+            for attempt in 0..2u32 {
                 match self.fetch_chunk(&span).await {
                     Ok(bytes) => {
                         out = Some(Arc::new(bytes));

@@ -107,7 +107,9 @@ pub(super) fn build_endpoints(
         let scheme = if s.https { "https" } else { "http" };
         endpoints.push(CdnEndpoint {
             base: format!("{scheme}://{}:{}", s.host, s.port),
-            token,
+            // A host that failed to issue a token comes back as Some("") from
+            // the CM call; normalise it to None so it sorts behind usable hosts.
+            token: token.filter(|value| !value.trim().is_empty()),
         });
     }
     endpoints
@@ -126,13 +128,14 @@ pub(super) fn build_resolved_video(
     endpoints: Vec<CdnEndpoint>,
     http: reqwest::Client,
 ) -> ResolvedVideo {
+    let pool = super::endpoint_pool::EndpointPool::new(endpoints.len());
     ResolvedVideo {
         info,
         depot_key: Arc::new(depot_key),
         depot,
         endpoints: Arc::new(endpoints),
         http: Arc::new(http),
-        preferred: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        pool: Arc::new(parking_lot::Mutex::new(pool)),
         cache: Arc::new(parking_lot::Mutex::new(std::collections::HashMap::new())),
         cached_bytes: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),

@@ -77,19 +77,9 @@ pub fn app_minimize(app: AppHandle) -> Result<(), String> {
 ///   2. then calls `AppHandle::exit(0)` to terminate the process.
 #[command]
 pub fn app_quit(app: AppHandle) {
-    for w in app.webview_windows().values() {
-        let _ = w.hide();
-        let _ = w.destroy();
-    }
-    // Tauri's `app.exit(0)` is best-effort and on Windows sometimes never
-    // returns when a hidden Steam webview is still around.  Schedule a hard
-    // process exit on a background thread so even if the runtime locks up
-    // the process actually terminates.
-    std::thread::spawn(|| {
-        std::thread::sleep(FORCED_EXIT_DELAY);
-        std::process::exit(0);
-    });
-    app.exit(0);
+    // Every close path funnels through the shutdown coordinator so the hidden
+    // steam-webview and external players cannot survive the process.
+    crate::core::shutdown::request(&app, "app_quit");
 }
 
 /// Read the persisted window geometry. Returns `None` if none has been
@@ -207,7 +197,3 @@ pub fn app_cancel_init_metadata(state: AppStateHandle<'_>) {
         .metadata_init_cancel
         .store(true, std::sync::atomic::Ordering::SeqCst);
 }
-
-// ── Timing constants ──────────────────────────────────────────
-/// Brief pause before a hard process exit so the runtime can unwind.
-const FORCED_EXIT_DELAY: std::time::Duration = std::time::Duration::from_millis(150);

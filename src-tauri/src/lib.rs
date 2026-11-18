@@ -50,6 +50,18 @@ pub fn run() {
     }
 
     let builder = tauri::Builder::default()
+        .on_window_event(|window, event| {
+            if window.label() == "main" {
+                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                    // Alt+F4 and the taskbar close button must take the same
+                    // path as the custom title bar: a plain close would destroy
+                    // only the main window and leave the hidden steam-webview
+                    // (and therefore the process) alive.
+                    api.prevent_close();
+                    crate::core::shutdown::request(window.app_handle(), "close-requested");
+                }
+            }
+        })
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             if let Some(window) = app.get_webview_window("main") {
                 // Showing a window that has not had its size applied yet leaves it at
@@ -85,6 +97,9 @@ pub fn run() {
             // Streams live outside AppState so they can be torn down
             // independently and survive account refreshes.
             app.manage(Arc::new(commands::video_stream::StreamRegistry::new()));
+            // Watchdog: if the main window ever disappears without going
+            // through CloseRequested, still terminate the process tree.
+            crate::core::shutdown::install_watchdog(app.handle().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -170,6 +185,8 @@ pub fn run() {
             commands::dotnet::dotnet_init,
             commands::plugins::plugins_init,
             commands::logging::log_frontend_message,
+            commands::video_stream::video_stream_cache_clear,
+            commands::video_stream::video_stream_cache_stats,
             commands::video_stream::video_stream_player,
             commands::video_stream::video_stream_prewarm,
             commands::video_stream::video_stream_start,

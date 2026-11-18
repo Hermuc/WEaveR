@@ -14,7 +14,8 @@
 //! exists only for the "watch while downloading" path.
 
 mod auth;
-mod disk_cache;
+pub(crate) mod disk_cache;
+mod endpoint_pool;
 mod layout_cache;
 mod fetch;
 mod manifest;
@@ -25,6 +26,9 @@ use fetch::{build_endpoints, build_resolved_video, fetch_cdn_tokens, fetch_manif
 use manifest::{decompress_manifest, is_video};
 
 pub use auth::{forget_session, login, shared_login};
+pub use disk_cache::{
+    clear as clear_cache, stats as cache_stats, CacheStats as VideoCacheStats,
+};
 pub use layout_cache::has_cached_layout;
 use layout_cache::{cached_layout, store_layout};
 
@@ -96,8 +100,9 @@ pub struct ResolvedVideo {
     depot: DepotId,
     endpoints: Arc<Vec<CdnEndpoint>>,
     http: Arc<reqwest::Client>,
-    /// Index of the endpoint that last worked, to avoid retrying dead ones.
-    preferred: Arc<std::sync::atomic::AtomicUsize>,
+    /// Per-endpoint health (failures, cooldown, latency), shared by all chunk
+    /// fetches of this stream. See endpoint_pool for the ranking policy.
+    pool: Arc<parking_lot::Mutex<endpoint_pool::EndpointPool>>,
     /// Decrypted chunk bodies already fetched, keyed by chunk index.
     ///
     /// Fetching one chunk serially from this CDN measured 1s for the first and
@@ -190,7 +195,7 @@ pub async fn resolve_video(
             // are one round-trip each and are required before the first chunk.
             let (depot_key, cdn_servers) = futures_util::try_join!(
                 client.get_depot_decryption_key(depot_id, app_id),
-                client.get_cdn_servers(CellId(0), Some(5)),
+                client.get_cdn_servers(CellId(0), Some(16)),
             )?;
             if cdn_servers.is_empty() {
                 return Err(anyhow::anyhow!("no CDN servers available"));
@@ -285,79 +290,22 @@ pub async fn resolve_video(
     // certificates on this machine; steamroom's rustls client does not.
     let http = reqwest::Client::builder()
         .timeout(CHUNK_HTTP_TIMEOUT)
+        // The CDN answers broken/expired chunk URLs with a 302 that has no
+        // usable Location; following it hangs until the timeout. Treat any
+        // redirect as a failed host and move to the next candidate.
+        .redirect(reqwest::redirect::Policy::none())
+        // Chunk fetches are sequential per stream; keep only a couple of idle
+        // connections per host so a long playlist does not accumulate sockets.
+        .pool_max_idle_per_host(2)
         .build()
         .map_err(|e| anyhow::anyhow!("http client: {e}"))?;
 
-    // Probing every endpoint costs seconds per dead host and the user is
-    // staring at a spinner. Probe with a short timeout, stop at the first host
-    // that serves bytes, and put it first. The remaining endpoints stay in the
-    // list as fallbacks without being probed.
-    let probe_span = spans
-        .iter()
-        .min_by_key(|s| s.len)
-        .ok_or_else(|| anyhow::anyhow!("video has no chunks"))?
-        .clone();
-    let probe_http = reqwest::Client::builder()
-        .timeout(ENDPOINT_PROBE_TIMEOUT)
-        .build()
-        .map_err(|e| anyhow::anyhow!("http client: {e}"))?;
-
-    // Probe all endpoints concurrently and keep the first that serves bytes.
-    // Serially probing meant one dead host cost a full timeout before the next
-    // was even tried.
-    let mut live: Vec<CdnEndpoint> = Vec::new();
-    {
-        use futures_util::future::FutureExt;
-        let mut futs: Vec<_> = endpoints
-            .iter()
-            .map(|ep| {
-                let url = format!(
-                    "{}/depot/{}/chunk/{}{}",
-                    ep.base,
-                    depot_id.0,
-                    probe_span.chunk_id,
-                    ep.token.as_deref().unwrap_or("")
-                );
-                let http = probe_http.clone();
-                let ep2 = ep.clone();
-                async move {
-                    match http.get(&url).send().await {
-                        Ok(r) if r.status().is_success() => Some(ep2),
-                        Ok(r) => {
-                            log::warn!(
-                                "[video-stream] CDN endpoint {} -> HTTP {}",
-                                ep2.base,
-                                r.status()
-                            );
-                            None
-                        }
-                        Err(e) => {
-                            log::warn!("[video-stream] CDN endpoint {} -> {e}", ep2.base);
-                            None
-                        }
-                    }
-                }
-                .boxed()
-            })
-            .collect();
-        while !futs.is_empty() {
-            let (res, _i, rest) = futures_util::future::select_all(futs).await;
-            futs = rest;
-            if let Some(ep) = res {
-                log::info!("[video-stream] CDN endpoint OK: {}", ep.base);
-                live.push(ep);
-                break;
-            }
-        }
-    }
-
-    if live.is_empty() {
-        // Nothing answered the probe. Rather than fail outright, keep every
-        // endpoint: the probe itself may have been the unlucky request, and
-        // read_range retries across the whole list anyway.
-        log::warn!("[video-stream] no endpoint answered the probe; trying all at read time");
-        live = endpoints.clone();
-    }
+    // Keep every endpoint and let the per-chunk health pool pick. Probing all
+    // hosts on every prewarm added 3-5 connections per item and still picked a
+    // single "winner"; when that host later stalled there was no fallback.
+    // Hosts with a token sort first: a token-less host is usually a 403.
+    let mut endpoints = endpoints;
+    endpoints.sort_by_key(|ep| ep.token.is_none());
 
     let info = VideoStreamInfo {
         item_id,
@@ -372,7 +320,7 @@ pub async fn resolve_video(
     }
     store_layout(item_id, &info);
 
-    Ok(build_resolved_video(info, depot_key, depot_id, live, http))
+    Ok(build_resolved_video(info, depot_key, depot_id, endpoints, http))
 }
 // ── Timing constants ──────────────────────────────────────────
 /// A manifest body can take tens of seconds on slow links.
@@ -381,8 +329,6 @@ const MANIFEST_DOWNLOAD_TIMEOUT: std::time::Duration = std::time::Duration::from
 const MANIFEST_RETRY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 /// HTTP client timeout for serving chunk bytes.
 const CHUNK_HTTP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
-/// Short probe timeout so dead hosts fail fast.
-const ENDPOINT_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
 
 #[cfg(test)]
 mod tests {

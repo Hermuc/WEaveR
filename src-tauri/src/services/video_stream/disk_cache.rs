@@ -14,6 +14,7 @@
 //! (tmp + rename) so a crash mid-write cannot leave a truncated chunk that
 //! would corrupt playback later.
 
+use serde::Serialize;
 use std::path::PathBuf;
 
 /// Default cap for the whole cache. 4 GiB covers several 4K wallpapers while
@@ -68,6 +69,41 @@ pub fn store(item_id: u64, manifest_id: u64, chunk_id: &str, bytes: &[u8]) -> st
     let tmp = path.with_extension("bin.tmp");
     std::fs::write(&tmp, bytes)?;
     std::fs::rename(&tmp, &path)?;
+    Ok(())
+}
+
+/// Aggregated cache usage, shown in the settings dialog.
+#[derive(Debug, Clone, Serialize)]
+pub struct CacheStats {
+    pub files: u64,
+    pub bytes: u64,
+    pub root: String,
+}
+
+/// Walk the cache and report file count / total bytes.
+pub fn stats() -> CacheStats {
+    let root = cache_root();
+    let mut files = Vec::new();
+    collect_files(&root, &mut files);
+    CacheStats {
+        files: files.len() as u64,
+        bytes: files.iter().map(|(_, size, _)| *size).sum(),
+        root: root.to_string_lossy().to_string(),
+    }
+}
+
+/// Delete every cached `.bin` file (keeps the directory structure).
+///
+/// Only touches files with the cache's own `.bin` extension: even if the
+/// cache directory is relocated via `WEAVE_VIDEO_CACHE_DIR`, this can never
+/// walk into unrelated files.
+pub fn clear() -> std::io::Result<()> {
+    let root = cache_root();
+    let mut files = Vec::new();
+    collect_files(&root, &mut files);
+    for (_, _, path) in files {
+        std::fs::remove_file(&path)?;
+    }
     Ok(())
 }
 
@@ -145,6 +181,18 @@ mod tests {
         let bytes = b"chunk-bytes";
         store(7, 8, "0011", bytes).expect("store");
         assert_eq!(load(7, 8, "0011").as_deref(), Some(&bytes[..]));
+
+        let stats = stats();
+        assert_eq!(stats.files, 1);
+        assert_eq!(stats.bytes, bytes.len() as u64);
+
+        // An unrelated file in the same tree must survive `clear`.
+        let keep = dir.join("keep.txt");
+        std::fs::write(&keep, b"not a chunk").expect("write keep");
+        clear().expect("clear");
+        assert!(load(7, 8, "0011").is_none());
+        assert!(keep.exists());
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

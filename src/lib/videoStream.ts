@@ -17,6 +17,13 @@ export interface StreamStarted {
   player: string;
 }
 
+export type VideoStreamState = "idle" | "pending" | "ready" | "failed";
+
+export interface VideoStreamStatus {
+  state: VideoStreamState;
+  error?: string | null;
+}
+
 /**
  * Kick off background resolution of a workshop video so a later "watch" click
  * is instant. Fire-and-forget; errors are logged server-side.
@@ -40,3 +47,31 @@ export async function startVideoStream(itemId: string | number): Promise<StreamS
   return await invoke<StreamStarted>("video_stream_start", { itemId: id });
 }
 
+/** Current prewarm lifecycle for an item (idle/pending/ready/failed). */
+export async function getVideoStreamStatus(
+  itemId: string | number,
+): Promise<VideoStreamStatus> {
+  const id = typeof itemId === "number" ? itemId : Number(itemId);
+  return await invoke<VideoStreamStatus>("video_stream_status", { itemId: id });
+}
+
+/**
+ * Steam workshop tags carry the item type ("Type: Video"). The exact value is
+ * localized by the page language, so match the common spellings instead of a
+ * single English constant. Accepts both the raw parser shape ({tag, category})
+ * and the plain strings used by installed items.
+ */
+const VIDEO_TAGS = new Set(["video", "视频", "動画", "影片", "movie"]);
+
+export function isVideoItem(item: { tags?: unknown } | null | undefined): boolean {
+  if (!item || !Array.isArray(item.tags)) return false;
+  return item.tags.some((entry) => {
+    const raw =
+      typeof entry === "string"
+        ? entry
+        : entry && typeof entry === "object"
+          ? (entry as { tag?: unknown }).tag
+          : null;
+    return typeof raw === "string" && VIDEO_TAGS.has(raw.trim().toLowerCase());
+  });
+}
