@@ -26,6 +26,8 @@ tauri-plugin-os = "2.3.2"
 tauri-plugin-single-instance = "2.4.2"
 # Phone sync engine (WE-Sync). The GUI target is not compiled (default-features = false).
 we-sync = { path = "../../we-sync", default-features = false }
+# Directory watcher for the sync feature (same version as we-sync uses).
+notify = "6"
 serde = { version = "1.0.228", features = [ "derive" ] }
 serde_json = "1.0.150"
 tokio = { version = "1.52.3", features = [ "full" ] }

@@ -6748,6 +6748,7 @@ dependencies = [
  "futures-util",
  "log",
  "lru",
+ "notify",
  "once_cell",
  "parking_lot",
  "pbkdf2 0.13.0",

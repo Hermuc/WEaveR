@@ -17,10 +17,10 @@ interface SyncGeneral {
 
 interface SyncConfig {
   general: SyncGeneral;
-  source: { workshop_dir: string };
+  source: { workshop_dir: string; mp4_only: boolean };
   filter: { min_mb: number; max_mb: number };
   target: { remote_dir: string; name_template: string; skip_existing: boolean };
-  transport: { prefer: string; adb_path: string; mtp_storage_index: number };
+  transport: { prefer: string; adb_path: string; mtp_storage_index: number; multipath?: Record<string, unknown> };
 }
 
 const DEFAULT_CONFIG: SyncConfig = {
@@ -31,10 +31,15 @@ const DEFAULT_CONFIG: SyncConfig = {
     settle_delay_secs: 8,
     max_retries: 2,
   },
-  source: { workshop_dir: "" },
+  source: { workshop_dir: "", mp4_only: true },
   filter: { min_mb: 0, max_mb: 0 },
   target: { remote_dir: "/sdcard/.WE", name_template: "{title} [{id}].{ext}", skip_existing: true },
-  transport: { prefer: "auto", adb_path: "", mtp_storage_index: 0 },
+  transport: {
+    prefer: "auto",
+    adb_path: "",
+    mtp_storage_index: 0,
+    multipath: { port: 5740, chunk_kb: 1024, agent_path: "", allow_single_link: false },
+  },
 };
 
 export default function SyncSettingsTab() {
@@ -146,6 +151,20 @@ export default function SyncSettingsTab() {
             <option value="adb">{t("settings.sync_prefer_adb")}</option>
           </select>
         </Row>
+        <Row label={t("settings.sync_mtp_storage")} description={t("settings.sync_mtp_storage_hint")}>
+          <input
+            type="number"
+            min={0}
+            value={config.transport.mtp_storage_index}
+            onChange={(event) =>
+              update((current) => ({
+                ...current,
+                transport: { ...current.transport, mtp_storage_index: Number(event.target.value) || 0 },
+              }))
+            }
+            className="w-24 rounded-md border border-white/10 bg-surface-sunken/40 px-2.5 py-1.5 text-xs text-foreground focus:ring-1 focus:ring-primary/50 focus:outline-none"
+          />
+        </Row>
         <Row label={t("settings.sync_adb_path")} description={t("settings.sync_adb_path_hint")}>
           <input
             value={config.transport.adb_path}
@@ -154,6 +173,16 @@ export default function SyncSettingsTab() {
             }
             placeholder="adb"
             className="w-56 rounded-md border border-white/10 bg-surface-sunken/40 px-2.5 py-1.5 text-xs text-foreground placeholder-white/25 focus:ring-1 focus:ring-primary/50 focus:outline-none"
+          />
+        </Row>
+        <Row label={t("settings.sync_mp4_only")} description={t("settings.sync_mp4_only_hint")}>
+          <input
+            type="checkbox"
+            checked={config.source.mp4_only}
+            onChange={(event) =>
+              update((current) => ({ ...current, source: { ...current.source, mp4_only: event.target.checked } }))
+            }
+            className="size-4 accent-primary"
           />
         </Row>
         <Row label={t("settings.sync_skip_existing")}>
@@ -174,6 +203,48 @@ export default function SyncSettingsTab() {
               update((current) => ({ ...current, general: { ...current.general, sync_on_start: event.target.checked } }))
             }
             className="size-4 accent-primary"
+          />
+        </Row>
+        <Row label={t("settings.sync_device_poll")}>
+          <input
+            type="number"
+            min={1}
+            value={config.general.device_poll_secs}
+            onChange={(event) =>
+              update((current) => ({
+                ...current,
+                general: { ...current.general, device_poll_secs: Number(event.target.value) || 1 },
+              }))
+            }
+            className="w-24 rounded-md border border-white/10 bg-surface-sunken/40 px-2.5 py-1.5 text-xs text-foreground focus:ring-1 focus:ring-primary/50 focus:outline-none"
+          />
+        </Row>
+        <Row label={t("settings.sync_settle_delay")}>
+          <input
+            type="number"
+            min={0}
+            value={config.general.settle_delay_secs}
+            onChange={(event) =>
+              update((current) => ({
+                ...current,
+                general: { ...current.general, settle_delay_secs: Number(event.target.value) || 0 },
+              }))
+            }
+            className="w-24 rounded-md border border-white/10 bg-surface-sunken/40 px-2.5 py-1.5 text-xs text-foreground focus:ring-1 focus:ring-primary/50 focus:outline-none"
+          />
+        </Row>
+        <Row label={t("settings.sync_max_retries")}>
+          <input
+            type="number"
+            min={0}
+            value={config.general.max_retries}
+            onChange={(event) =>
+              update((current) => ({
+                ...current,
+                general: { ...current.general, max_retries: Number(event.target.value) || 0 },
+              }))
+            }
+            className="w-24 rounded-md border border-white/10 bg-surface-sunken/40 px-2.5 py-1.5 text-xs text-foreground focus:ring-1 focus:ring-primary/50 focus:outline-none"
           />
         </Row>
       </Section>
