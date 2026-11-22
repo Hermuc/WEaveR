@@ -225,6 +225,7 @@ pub fn we_open(state: AppStateHandle<'_>, show_window: Option<bool>) -> Result<(
 pub async fn we_delete_wallpaper(
     state: AppStateHandle<'_>,
     pubfileid: String,
+    force: Option<bool>,
 ) -> Result<(), String> {
     // Async on purpose: this hits the disk (config.json read, folder removal,
     // metadata rewrite). A synchronous command would run on the main thread
@@ -233,7 +234,7 @@ pub async fn we_delete_wallpaper(
     let client = state.we_client.clone();
     let metadata = state.metadata.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        delete_wallpaper_blocking(&client, &metadata, &pubfileid)
+        delete_wallpaper_blocking(&client, &metadata, &pubfileid, force.unwrap_or(false))
     })
     .await
     .map_err(|e| e.to_string())?
@@ -251,10 +252,12 @@ pub async fn we_delete_wallpaper(
 pub async fn we_delete_wallpapers_bulk(
     state: AppStateHandle<'_>,
     pubfileids: Vec<String>,
+    force: Option<bool>,
 ) -> Result<Vec<(String, String)>, String> {
     let client = state.we_client.clone();
     let metadata = state.metadata.clone();
     tauri::async_runtime::spawn_blocking(move || {
+        let force = force.unwrap_or(false);
         let mut failures: Vec<(String, String)> = Vec::new();
         let mut removed: Vec<String> = Vec::new();
 
@@ -271,7 +274,10 @@ pub async fn we_delete_wallpapers_bulk(
                 continue;
             };
             if source == crate::we_client::SOURCE_WORKSHOP {
-                failures.push((pubfileid.clone(), format!("WORKSHOP:{pubfileid}")));
+                match delete_workshop_folder(&folder, pubfileid, force) {
+                    Ok(()) => removed.push(pubfileid.clone()),
+                    Err(error) => failures.push((pubfileid.clone(), error)),
+                }
                 continue;
             }
             match remove_folder(&folder) {
@@ -295,6 +301,7 @@ fn delete_wallpaper_blocking(
     client: &std::sync::Arc<parking_lot::RwLock<WallpaperEngineClient>>,
     metadata: &std::sync::Arc<parking_lot::RwLock<crate::config::MetadataService>>,
     pubfileid: &str,
+    force: bool,
 ) -> Result<(), String> {
     // Refuse to delete a wallpaper that's currently being displayed on any
     // monitor — otherwise Wallpaper Engine keeps a file handle and the
@@ -312,11 +319,15 @@ fn delete_wallpaper_blocking(
         return Err(format!("NOTFOUND:{pubfileid}"));
     };
 
-    // Workshop folders belong to the Steam client. Removing one just makes
-    // Steam re-download it, and can leave the subscription bookkeeping
-    // inconsistent, so refuse and let the caller explain.
+    // Workshop folders belong to the Steam client. A folder is only safe to
+    // remove when Steam no longer has a subscription for it (an item can stay
+    // in WorkshopItemsInstalled after the subscription is gone). Anything
+    // still subscribed needs an explicit force confirmation from the user.
     if source == crate::we_client::SOURCE_WORKSHOP {
-        return Err(format!("WORKSHOP:{pubfileid}"));
+        delete_workshop_folder(&folder, pubfileid, force)?;
+        metadata.read().remove_item(pubfileid);
+        client.read().invalidate_installed();
+        return Ok(());
     }
 
     metadata.read().remove_item(pubfileid);
@@ -439,4 +450,113 @@ fn remove_folder(folder: &std::path::Path) -> anyhow::Result<()> {
         std::fs::remove_dir_all(folder)?;
     }
     Ok(())
+}
+
+/// Move a Workshop folder to the recycle bin so a mistaken delete is
+/// recoverable.
+#[cfg(target_os = "windows")]
+fn remove_folder_to_trash(folder: &std::path::Path) -> anyhow::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::core::PCWSTR;
+    use windows::Win32::Foundation::{BOOL, HWND};
+    use windows::Win32::UI::Shell::{
+        SHFileOperationW, SHFILEOPSTRUCTW, FOF_ALLOWUNDO, FOF_NOCONFIRMATION, FOF_NOERRORUI,
+        FOF_SILENT, FO_DELETE,
+    };
+
+    if !folder.exists() {
+        return Ok(());
+    }
+    // SHFileOperation expects a double-NUL-terminated path.
+    let mut path: Vec<u16> = folder.as_os_str().encode_wide().collect();
+    path.push(0);
+    path.push(0);
+    let mut operation = SHFILEOPSTRUCTW {
+        hwnd: HWND(std::ptr::null_mut()),
+        wFunc: FO_DELETE,
+        pFrom: PCWSTR(path.as_ptr()),
+        pTo: PCWSTR::null(),
+        fFlags: (FOF_ALLOWUNDO.0 | FOF_NOCONFIRMATION.0 | FOF_SILENT.0 | FOF_NOERRORUI.0) as u16,
+        fAnyOperationsAborted: BOOL(0),
+        hNameMappings: std::ptr::null_mut(),
+        lpszProgressTitle: PCWSTR::null(),
+    };
+    let result = unsafe { SHFileOperationW(&mut operation) };
+    if result != 0 {
+        return Err(anyhow::anyhow!("SHFileOperationW failed with code {result}"));
+    }
+    if operation.fAnyOperationsAborted.as_bool() {
+        return Err(anyhow::anyhow!("recycle operation was aborted"));
+    }
+    Ok(())
+}
+
+/// Non-Windows fallback: there is no portable recycle-bin API wired up yet.
+/// WEaveR ships on Windows; this branch only keeps the code compiling.
+#[cfg(not(target_os = "windows"))]
+fn remove_folder_to_trash(folder: &std::path::Path) -> anyhow::Result<()> {
+    if folder.exists() {
+        std::fs::remove_dir_all(folder)?;
+    }
+    Ok(())
+}
+
+/// Only allow the exact Steam Workshop layout:
+/// <steamapps>/workshop/content/431960/<digits>. This is the path-safety gate
+/// for the one place where WEaveR deletes a Steam-owned folder.
+fn validate_workshop_folder(folder: &std::path::Path, pubfileid: &str) -> Result<(), String> {
+    if pubfileid.is_empty() || !pubfileid.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(format!("INVALID_PATH:{pubfileid}"));
+    }
+    let name = folder
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_default();
+    if name != pubfileid {
+        return Err(format!("INVALID_PATH:{pubfileid}"));
+    }
+    let parent = folder.parent();
+    let app_dir = parent.and_then(|p| p.file_name()).and_then(|n| n.to_str());
+    let content = parent
+        .and_then(|p| p.parent())
+        .and_then(|p| p.file_name())
+        .and_then(|n| n.to_str());
+    let workshop = parent
+        .and_then(|p| p.parent())
+        .and_then(|p| p.parent())
+        .and_then(|p| p.file_name())
+        .and_then(|n| n.to_str());
+    if app_dir != Some("431960") || content != Some("content") || workshop != Some("workshop") {
+        return Err(format!("INVALID_PATH:{pubfileid}"));
+    }
+    let meta = std::fs::symlink_metadata(folder).map_err(map_err)?;
+    if meta.file_type().is_symlink() {
+        return Err(format!("INVALID_PATH:{pubfileid}"));
+    }
+    Ok(())
+}
+
+/// Delete one Workshop folder with the residual/subscription policy:
+///   * no subscription record -> residual, move to the recycle bin;
+///   * still subscribed, but the caller passed force -> same, with a warning;
+///   * still subscribed and no force -> refuse with WORKSHOP_SUBSCRIBED so the
+///     UI can ask for an explicit confirmation.
+fn delete_workshop_folder(
+    folder: &std::path::Path,
+    pubfileid: &str,
+    force: bool,
+) -> Result<(), String> {
+    validate_workshop_folder(folder, pubfileid)?;
+    let Some(content_dir) = folder.parent() else {
+        return Err(format!("INVALID_PATH:{pubfileid}"));
+    };
+    let acf = crate::services::steam_acf::WorkshopAcf::load_for_content_dir(content_dir);
+    let residual = acf.is_residual(pubfileid);
+    if !residual && !force {
+        return Err(format!("WORKSHOP_SUBSCRIBED:{pubfileid}"));
+    }
+    if !residual {
+        log::warn!("[delete] force-deleting subscribed workshop item {pubfileid}");
+    }
+    remove_folder_to_trash(folder).map_err(map_err)
 }

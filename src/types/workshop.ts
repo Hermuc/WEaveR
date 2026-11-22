@@ -87,6 +87,8 @@ export interface InstalledWallpaper {
    * workshop       — a Steam Workshop subscription (Steam owns the folder)
    */
   source: InstalledSource;
+  /** Workshop item installed by Steam but no longer subscribed. */
+  is_residual?: boolean;
 }
 
 

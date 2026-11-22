@@ -171,6 +171,18 @@ export default function DetailsActionButtons({
 
   const overlayDelete = async () => {
     if (!installedHandle) return;
+    const isWorkshop = installedHandle.source === "workshop";
+    const isResidual = isWorkshop && Boolean(installedHandle.is_residual);
+    if (isWorkshop && !isResidual) {
+      const forceConfirmed = await confirm({
+        title: t("messages.workshop_force_confirm_title"),
+        message: t("messages.workshop_force_confirm_body"),
+        confirmLabel: t("buttons.delete") || "Delete",
+        cancelLabel: t("buttons.cancel") || "Cancel",
+        variant: "danger",
+      });
+      if (!forceConfirmed) return;
+    }
     if (inTauri) {
       const activeIds = await tryInvoke<string[]>("we_active_pubfileids", undefined, []) || [];
       if (activeIds.includes(installedHandle.pubfileid)) {
@@ -182,22 +194,26 @@ export default function DetailsActionButtons({
         return;
       }
     }
-    const confirmed = await confirm({
-      title: t("tooltips.delete_wallpaper") || "Delete Wallpaper",
-      message:
-        t("messages.confirm_delete") ||
-        "Delete this wallpaper?\n\nThe wallpaper folder will be removed from your Wallpaper Engine library permanently. This action cannot be undone.",
-      confirmLabel: t("buttons.delete") || "Delete",
-      cancelLabel: t("buttons.cancel") || "Cancel",
-      variant: "danger",
-    });
-    if (!confirmed) return;
+    if (!isWorkshop || isResidual) {
+      const confirmed = await confirm({
+        title: t("tooltips.delete_wallpaper") || "Delete Wallpaper",
+        message: isResidual
+          ? t("messages.confirm_delete_residual")
+          : t("messages.confirm_delete") ||
+            "Delete this wallpaper?\n\nThe wallpaper folder will be removed from your Wallpaper Engine library permanently. This action cannot be undone.",
+        confirmLabel: t("buttons.delete") || "Delete",
+        cancelLabel: t("buttons.cancel") || "Cancel",
+        variant: "danger",
+      });
+      if (!confirmed) return;
+    }
 
     removeOptimistic(installedHandle.pubfileid);
     onClose();
 
     const res = await tryInvokeAction("we_delete_wallpaper", {
       pubfileid: installedHandle.pubfileid,
+      ...(isWorkshop && !isResidual ? { force: true } : {}),
     });
 
     if (res.ok) {

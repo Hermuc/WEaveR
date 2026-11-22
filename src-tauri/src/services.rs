@@ -7,6 +7,7 @@ pub mod i18n;
 pub mod metadata;
 pub mod process_reader;
 pub mod qr;
+pub mod steam_acf;
 pub mod steam_auth;
 pub mod steam_session;
 pub mod sync;

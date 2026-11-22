@@ -201,6 +201,9 @@ export default {
   messages: {
     delete_not_found: "That wallpaper folder no longer exists on disk.",
     delete_workshop_blocked: "Steam Workshop wallpapers are managed by Steam — unsubscribe there to remove it.",
+    workshop_force_confirm_title: "Steam still lists this Workshop item",
+    workshop_force_confirm_body: "It may still be subscribed. Deleting moves the folder to the recycle bin; if Steam downloads it again, the subscription was still active.",
+    confirm_delete_residual: "Delete this leftover wallpaper? The folder will be moved to the recycle bin.",
     workshop_item_not_deletable: "Steam Workshop wallpapers are managed by Steam — unsubscribe there to remove it.",
     bulk_delete_has_workshop: "{{count}} selected wallpapers are Steam Workshop items and cannot be deleted here.",
     source_workshop: "Steam Workshop",

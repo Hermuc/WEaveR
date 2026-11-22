@@ -63,15 +63,20 @@ export function useWallpaperBulkActions({
   };
 
   const handleDelete = async (item: InstalledWallpaper) => {
-    // Workshop folders belong to the Steam client: deleting one just makes
-    // Steam re-download it, and can leave its subscription state confused.
-    if (item.source === "workshop") {
-      pushToast(
-        t("messages.workshop_item_not_deletable") ||
-          "Steam Workshop wallpapers are managed by Steam — unsubscribe there to remove it.",
-        "warning",
-      );
-      return;
+    const isWorkshop = item.source === "workshop";
+    const isResidual = isWorkshop && Boolean(item.is_residual);
+    // A Workshop item that Steam no longer subscribes to is a leftover and can
+    // be deleted. One that is still subscribed needs an explicit confirmation:
+    // Steam would simply download it again.
+    if (isWorkshop && !isResidual) {
+      const forceConfirmed = await confirm({
+        title: t("messages.workshop_force_confirm_title"),
+        message: t("messages.workshop_force_confirm_body"),
+        confirmLabel: t("buttons.delete") || "Delete",
+        cancelLabel: t("buttons.cancel") || "Cancel",
+        variant: "danger",
+      });
+      if (!forceConfirmed) return;
     }
     if (inTauri) {
       const active = await tryInvoke<string[]>(
@@ -88,16 +93,19 @@ export function useWallpaperBulkActions({
         return;
       }
     }
-    const confirmed = await confirm({
-      title: t("tooltips.delete_wallpaper") || "Delete Wallpaper",
-      message:
-        t("messages.confirm_delete") ||
-        "Delete this wallpaper?\n\nThe wallpaper folder will be removed from your Wallpaper Engine library permanently. This action cannot be undone.",
-      confirmLabel: t("buttons.delete") || "Delete",
-      cancelLabel: t("buttons.cancel") || "Cancel",
-      variant: "danger",
-    });
-    if (!confirmed) return;
+    if (!isWorkshop || isResidual) {
+      const confirmed = await confirm({
+        title: t("tooltips.delete_wallpaper") || "Delete Wallpaper",
+        message: isResidual
+          ? t("messages.confirm_delete_residual")
+          : t("messages.confirm_delete") ||
+            "Delete this wallpaper?\n\nThe wallpaper folder will be removed from your Wallpaper Engine library permanently. This action cannot be undone.",
+        confirmLabel: t("buttons.delete") || "Delete",
+        cancelLabel: t("buttons.cancel") || "Cancel",
+        variant: "danger",
+      });
+      if (!confirmed) return;
+    }
 
     const previousItems = items;
     setItems((prev) => prev.filter((i) => i.pubfileid !== item.pubfileid));
@@ -110,6 +118,7 @@ export function useWallpaperBulkActions({
 
     const res = await tryInvokeAction("we_delete_wallpaper", {
       pubfileid: item.pubfileid,
+      ...(isWorkshop && !isResidual ? { force: true } : {}),
     });
 
     if (res.ok) {
@@ -125,17 +134,19 @@ export function useWallpaperBulkActions({
   const handleBulkDelete = async () => {
     if (selectedIds.size === 0) return;
 
-    const workshopIds = new Set(
-      items.filter((i) => selectedIds.has(i.pubfileid) && i.source === "workshop").map((i) => i.pubfileid),
+    const workshopItems = items.filter(
+      (i) => selectedIds.has(i.pubfileid) && i.source === "workshop",
     );
-    if (workshopIds.size > 0) {
-      pushToast(
-        t("messages.bulk_delete_has_workshop", { count: workshopIds.size }) ||
-          `${workshopIds.size} of the selected wallpapers are Steam Workshop items and cannot be deleted here.`
-        ,
-        "error",
-      );
-      return;
+    const nonResidualWorkshop = workshopItems.filter((i) => !i.is_residual);
+    if (nonResidualWorkshop.length > 0) {
+      const forceConfirmed = await confirm({
+        title: t("messages.workshop_force_confirm_title"),
+        message: t("messages.workshop_force_confirm_body"),
+        confirmLabel: t("buttons.delete") || "Delete",
+        cancelLabel: t("buttons.cancel") || "Cancel",
+        variant: "danger",
+      });
+      if (!forceConfirmed) return;
     }
 
     if (inTauri) {
@@ -190,7 +201,7 @@ export function useWallpaperBulkActions({
     // window. The backend now takes the whole list in one shot.
     const failure = await tryInvokeAction<Array<[string, string]>>(
       "we_delete_wallpapers_bulk",
-      { pubfileids: Array.from(toDelete) },
+      { pubfileids: Array.from(toDelete), force: nonResidualWorkshop.length > 0 },
     );
     const failed = failure.ok ? (failure.value ?? []) : [];
     const successCount = toDelete.size - failed.length;
@@ -405,6 +416,9 @@ function describeDeleteError(
   raw: string,
   t: (key: TranslationKey) => string,
 ): string {
+  if (raw.startsWith("WORKSHOP_SUBSCRIBED:")) {
+    return t("messages.workshop_force_confirm_body");
+  }
   if (raw.startsWith("WORKSHOP:")) {
     return t("messages.delete_workshop_blocked");
   }

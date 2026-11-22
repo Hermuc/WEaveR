@@ -7,6 +7,7 @@
 use std::path::{Path, PathBuf};
 
 use super::steam_dirs::workshop_content_dirs;
+use crate::services::steam_acf::WorkshopAcf;
 use super::{
     parse_project, InstalledWallpaper, WallpaperEngineClient, SOURCE_DEFAULT_PROJECTS,
     SOURCE_MY_PROJECTS, SOURCE_WORKSHOP,
@@ -74,6 +75,11 @@ impl WallpaperEngineClient {
             if !dir.is_dir() {
                 continue;
             }
+            let acf = if source == SOURCE_WORKSHOP {
+                WorkshopAcf::load_for_content_dir(&dir)
+            } else {
+                WorkshopAcf::default()
+            };
             let Ok(entries) = std::fs::read_dir(&dir) else {
                 continue;
             };
@@ -97,6 +103,8 @@ impl WallpaperEngineClient {
                 }
                 let mut wallpaper = parse_project(&folder, &pubfileid);
                 wallpaper.source = source.to_string();
+                wallpaper.is_residual =
+                    source == SOURCE_WORKSHOP && acf.is_residual(&pubfileid);
                 // Wallpaper Engine ships its sample projects without a
                 // contentrating field, but they are first-party samples and
                 // always family-friendly. Without this they would only ever

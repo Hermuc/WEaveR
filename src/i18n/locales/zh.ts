@@ -201,6 +201,9 @@ export default {
   messages: {
     delete_not_found: "该壁纸文件夹在磁盘上已不存在。",
     delete_workshop_blocked: "Steam 创意工坊的壁纸由 Steam 管理，请在 Steam 中取消订阅来移除。",
+    workshop_force_confirm_title: "Steam 仍记录此工坊壁纸",
+    workshop_force_confirm_body: "它可能仍处于订阅状态。删除后文件夹会移入回收站；如果 Steam 重新下载，说明订阅仍未取消。",
+    confirm_delete_residual: "删除这个残留壁纸？文件夹会移入回收站，可从回收站恢复。",
     workshop_item_not_deletable: "Steam 创意工坊的壁纸由 Steam 管理，请在 Steam 中取消订阅来移除。",
     bulk_delete_has_workshop: "所选中有 {{count}} 个是 Steam 创意工坊壁纸，不能在这里删除。",
     source_workshop: "创意工坊",

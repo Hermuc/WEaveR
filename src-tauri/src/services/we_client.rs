@@ -34,6 +34,10 @@ pub struct InstalledWallpaper {
     pub installed_ts: i64,
     /// Where this wallpaper was found. See the SOURCE_ constants below.
     pub source: String,
+    /// Workshop item that Steam still lists as installed but no longer has a
+    /// subscription for. Reset by the scan; false for non-workshop entries.
+    #[serde(default)]
+    pub is_residual: bool,
 }
 
 /// A project WEave downloaded itself into projects/myprojects.
@@ -128,6 +132,7 @@ pub(super) fn parse_project(folder: &Path, pubfileid: &str) -> InstalledWallpape
         installed_ts,
         // Caller overwrites this with the directory it was found in.
         source: SOURCE_MY_PROJECTS.to_string(),
+        is_residual: false,
     }
 }
 /// against pathological trees (a project folder pointed at a huge nested
