@@ -391,7 +391,7 @@ async function syncSteamSession() {
     // its previous state is the honest answer: a red "login failed" badge for
     // a network hiccup is exactly the bug this replaces.
     if (probe.state === "unknown") {
-      session.setUnknownOrKeep();
+      session.setOffline();
       return;
     }
 
@@ -412,7 +412,7 @@ async function syncSteamSession() {
       }
     }
     if (restored?.state === "unknown") {
-      session.setUnknownOrKeep();
+      session.setOffline();
       return;
     }
 

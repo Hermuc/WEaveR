@@ -13,6 +13,7 @@ import {
   Loader2,
   PanelLeftClose,
   PanelLeftOpen,
+  WifiOff,
 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
@@ -176,6 +177,14 @@ function visualsFor(phase: SteamSessionPhase): StatusVisuals | null {
         tone: "text-danger",
         dotTone: "bg-danger",
         labelKey: "steam_status.error",
+      };
+    case "offline":
+      return {
+        Icon: WifiOff,
+        spin: false,
+        tone: "text-muted",
+        dotTone: "bg-muted",
+        labelKey: "steam_status.offline",
       };
     // `idle` (nothing happened yet / non-Tauri) renders nothing.
     default:

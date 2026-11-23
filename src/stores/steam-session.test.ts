@@ -34,6 +34,14 @@ describe("steam-session store", () => {
     expect(useSteamSessionStore.getState().phase).toBe("error");
   });
 
+  it("setOffline marks the probe as network-unreachable", () => {
+    useSteamSessionStore.getState().setLoggingIn();
+    useSteamSessionStore.getState().setOffline();
+    const s = useSteamSessionStore.getState();
+    expect(s.phase).toBe("offline");
+    expect(s.account).toBeNull();
+  });
+
   it("setUnknownOrKeep turns idle into signed-out and otherwise keeps state", () => {
     useSteamSessionStore.getState().setUnknownOrKeep();
     expect(useSteamSessionStore.getState().phase).toBe("signed-out");

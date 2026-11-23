@@ -72,7 +72,7 @@ async fn complete_oauth_login(
     // will settle it, but an explicit rejection must surface as a failure.
     let verify = state
         .steam_session
-        .verify(&steam_id, &tokens.access_token)
+        .verify(&steam_id, &tokens.access_token, Some(&tokens.refresh_token))
         .await;
     log::info!("[steam-session] OAuth login verify: {verify:?}");
     if verify == crate::services::steam_session::SessionState::SignedOut {

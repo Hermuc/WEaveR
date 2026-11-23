@@ -22,7 +22,8 @@ export type SteamSessionPhase =
   | "logging-in"
   | "logged-in"
   | "signed-out"
-  | "error";
+  | "error"
+  | "offline";
 
 export interface SteamAccountInfo {
   persona_name: string;
@@ -47,6 +48,8 @@ interface SteamSessionStore {
   setError: () => void;
   /// No account signed in, but nothing failed.
   setSignedOut: () => void;
+  /// The probe could not reach Steam at all (network blocked/unavailable).
+  setOffline: () => void;
   /// The probe could not reach Steam; keep whatever we already knew.
   setUnknownOrKeep: () => void;
 }
@@ -59,6 +62,7 @@ export const useSteamSessionStore = create<SteamSessionStore>((set) => ({
   setLoggedIn: (account) => set({ phase: "logged-in", account }),
   setError: () => set({ phase: "error", account: null }),
   setSignedOut: () => set({ phase: "signed-out", account: null }),
+  setOffline: () => set({ phase: "offline", account: null }),
   setUnknownOrKeep: () =>
     set((s) => (s.phase === "idle" ? { phase: "signed-out" } : {})),
 }));

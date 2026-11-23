@@ -72,6 +72,7 @@ export default {
   },
   steam_status: {
     logging_in: "Signing Steam",
+    offline: "Steam unreachable",
     signed_in: "Signed in",
     signed_out: "Not signed in (browsing anonymously)",
     error: "Sign-in failed",
@@ -201,6 +202,10 @@ export default {
   messages: {
     delete_not_found: "That wallpaper folder no longer exists on disk.",
     delete_workshop_blocked: "Steam Workshop wallpapers are managed by Steam — unsubscribe there to remove it.",
+    workshop_unavailable_title: "Cannot load the Steam Workshop",
+    workshop_unavailable_body: "This network cannot reach steamcommunity.com, so Workshop browsing is unavailable. Installed wallpapers, sync and local playback are unaffected.",
+    workshop_unavailable_hint: "Check your network connection or try again later.",
+    workshop_retry: "Retry",
     workshop_force_confirm_title: "Steam still lists this Workshop item",
     workshop_force_confirm_body: "It may still be subscribed. Deleting moves the folder to the recycle bin; if Steam downloads it again, the subscription was still active.",
     confirm_delete_residual: "Delete this leftover wallpaper? The folder will be moved to the recycle bin.",

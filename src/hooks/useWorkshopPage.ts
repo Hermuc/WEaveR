@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { useRefreshStore } from "@/stores/refresh";
 import { useSteamSessionStore } from "@/stores/steam-session";
-import { inTauri, tryInvoke, tryInvokeOk } from "@/lib/tauri";
+import { inTauri, tryInvoke, tryInvokeAction, tryInvokeOk } from "@/lib/tauri";
 import type { WorkshopFilters } from "@/stores/filters";
 import type { WorkshopPage } from "@/types/workshop";
 
@@ -57,6 +57,8 @@ interface UseWorkshopPageOptions {
 interface UseWorkshopPageResult {
   page: WorkshopPage | null;
   loading: boolean;
+  /** Non-null when the last fetch failed (network / blocked host). */
+  error: string | null;
   cache: React.MutableRefObject<Map<string, WorkshopPage>>;
 }
 
@@ -81,6 +83,7 @@ export function useWorkshopPage({
   const refreshCounter = useRefreshStore((s) => s.counter);
   const [page, setPage] = useState<WorkshopPage | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const cache = useRef<Map<string, WorkshopPage>>(new Map());
 
   const filtersKey = useMemo(() => JSON.stringify(filters), [filters]);
@@ -119,10 +122,19 @@ export function useWorkshopPage({
         }
         let result = cached;
         if (!result) {
-          result = (await tryInvoke<WorkshopPage>(cmd, { filters })) ?? undefined;
+          const outcome = await tryInvokeAction<WorkshopPage>(cmd, { filters });
+          if (!outcome.ok) {
+            if (!active) return;
+            setPage(null);
+            setError(outcome.error);
+            setLoading(false);
+            return;
+          }
+          result = outcome.value;
           if (result) cache.current.set(key, result);
         }
         if (!active) return;
+        setError(null);
         setPage(result ?? null);
         setLoading(false);
 
@@ -157,5 +169,5 @@ export function useWorkshopPage({
     };
   }, [enabled, cmd, filters, filtersKey, cacheScope, preloadNext, mockKind, refreshCounter, steamPhase]);
 
-  return { page, loading, cache };
+  return { page, loading, error, cache };
 }

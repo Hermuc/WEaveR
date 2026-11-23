@@ -325,7 +325,10 @@ pub async fn steam_probe_account(state: AppStateHandle<'_>) -> Result<serde_json
     if !account_name.is_empty() {
         if let Ok(Some(access)) = state.steam_session.ensure_access_token(&account_name).await {
             if let Some(session) = state.steam_session.stored(&account_name) {
-                let verdict = state.steam_session.verify(&session.steam_id, &access).await;
+                let verdict = state
+                    .steam_session
+                    .verify(&session.steam_id, &access, Some(&session.refresh_token))
+                    .await;
                 log::info!(
                     "[probe] steam_probe_account -> {} (verify)",
                     match verdict {
@@ -446,14 +449,14 @@ pub async fn steam_restore_session(
         return Ok(SessionState::SignedOut);
     };
 
-    let mut result = install_and_verify(&state, &session.steam_id, &access).await?;
+    let mut result = install_and_verify(&state, &session.steam_id, &access, Some(&session.refresh_token)).await?;
     if result == SessionState::SignedOut {
         // The token may still look valid locally (JWT exp in the future) while
         // Steam has revoked it. Force one refresh before asking the user to log
         // in again — this is the "signed in yesterday, revoked today" case.
         if let Ok(Some(refreshed)) = state.steam_session.force_refresh(&account).await {
             access = refreshed;
-            result = install_and_verify(&state, &session.steam_id, &access).await?;
+            result = install_and_verify(&state, &session.steam_id, &access, Some(&session.refresh_token)).await?;
         }
     }
     log::info!("[steam-session] restore verify for {account}: {result:?}");
@@ -465,6 +468,7 @@ async fn install_and_verify(
     state: &AppStateHandle<'_>,
     steam_id: &str,
     access_token: &str,
+    refresh_token: Option<&str>,
 ) -> Result<crate::services::steam_session::SessionState, String> {
     // The window has to exist before cookies can be written into it.
     state.steam_webview.ensure_profile_loaded().await;
@@ -475,7 +479,7 @@ async fn install_and_verify(
     tokio::time::sleep(COOKIE_APPLY_WAIT).await;
     let _ = state.steam_webview.sync_cookies().await;
     state.workshop.clear_caches();
-    Ok(state.steam_session.verify(steam_id, access_token).await)
+    Ok(state.steam_session.verify(steam_id, access_token, refresh_token).await)
 }
 
 /// Persist the OAuth tokens that came out of a successful sign-in.

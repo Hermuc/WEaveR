@@ -72,6 +72,7 @@ export default {
   },
   steam_status: {
     logging_in: "正在登录 Steam",
+    offline: "无法连接 Steam",
     signed_in: "已登录",
     signed_out: "未登录（可匿名浏览）",
     error: "登录失败",
@@ -201,6 +202,10 @@ export default {
   messages: {
     delete_not_found: "该壁纸文件夹在磁盘上已不存在。",
     delete_workshop_blocked: "Steam 创意工坊的壁纸由 Steam 管理，请在 Steam 中取消订阅来移除。",
+    workshop_unavailable_title: "无法加载 Steam 工坊",
+    workshop_unavailable_body: "当前网络无法访问 steamcommunity.com，工坊浏览暂不可用。已安装壁纸、同步与本地播放不受影响。",
+    workshop_unavailable_hint: "请检查网络连接，或稍后重试。",
+    workshop_retry: "重试",
     workshop_force_confirm_title: "Steam 仍记录此工坊壁纸",
     workshop_force_confirm_body: "它可能仍处于订阅状态。删除后文件夹会移入回收站；如果 Steam 重新下载，说明订阅仍未取消。",
     confirm_delete_residual: "删除这个残留壁纸？文件夹会移入回收站，可从回收站恢复。",

@@ -235,11 +235,36 @@ impl SteamSessionService {
     }
 
     /// Ask Steam whether the reconstructed session is really accepted.
-    pub async fn verify(&self, steam_id: &str, access_token: &str) -> SessionState {
+    ///
+    /// steamcommunity.com is the primary signal (it is what the WebView uses),
+    /// but it can be blocked while api.steampowered.com is reachable. When the
+    /// community probe cannot answer, fall back to exchanging the stored
+    /// refresh token through the Web API: a successful exchange means the
+    /// session is alive, an explicit rejection means it is not.
+    pub async fn verify(
+        &self,
+        steam_id: &str,
+        access_token: &str,
+        refresh_token: Option<&str>,
+    ) -> SessionState {
         match verify::verify_session(&self.verify_client, steam_id, access_token).await {
-            verify::VerifyResult::SignedIn => SessionState::SignedIn,
-            verify::VerifyResult::SignedOut => SessionState::SignedOut,
-            verify::VerifyResult::Unknown => SessionState::Unknown,
+            verify::VerifyResult::SignedIn => return SessionState::SignedIn,
+            verify::VerifyResult::SignedOut => return SessionState::SignedOut,
+            verify::VerifyResult::Unknown => {}
+        }
+        let Some(refresh_token) = refresh_token else {
+            return SessionState::Unknown;
+        };
+        match refresh::verify_refresh_token(steam_id, refresh_token).await {
+            refresh::RefreshVerify::Valid => {
+                log::info!("[steam-session] verified via api.steampowered.com");
+                SessionState::SignedIn
+            }
+            refresh::RefreshVerify::Rejected => {
+                log::info!("[steam-session] refresh token rejected by api.steampowered.com");
+                SessionState::SignedOut
+            }
+            refresh::RefreshVerify::Unavailable => SessionState::Unknown,
         }
     }
 }

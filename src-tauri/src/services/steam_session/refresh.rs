@@ -54,6 +54,82 @@ pub async fn refresh_access_token(
     }
 }
 
+/// Result of checking a refresh token against the HTTP API.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RefreshVerify {
+    /// The API exchanged the refresh token: the session is alive.
+    Valid,
+    /// Steam explicitly rejected the token (AccessDenied / 401 / 403).
+    Rejected,
+    /// Network, timeout or server error: says nothing about the token.
+    Unavailable,
+}
+
+/// Classify the GenerateAccessTokenForApp response. Pure so the rules are
+/// unit-testable without a network.
+pub fn classify_http_result(status: u16, eresult: Option<&str>) -> RefreshVerify {
+    let eresult = eresult.unwrap_or("-");
+    if status == 200 && (eresult == "-" || eresult == "1") {
+        RefreshVerify::Valid
+    } else if eresult == "15" || status == 401 || status == 403 {
+        RefreshVerify::Rejected
+    } else {
+        RefreshVerify::Unavailable
+    }
+}
+
+/// Verify a stored refresh token through api.steampowered.com.
+///
+/// This is the fallback used when steamcommunity.com is unreachable: the
+/// API lives on a different host and answers even when the community site is
+/// blocked. The returned access token is deliberately discarded - the caller
+/// only needs the verdict.
+pub async fn verify_refresh_token(steam_id: &str, refresh_token: &str) -> RefreshVerify {
+    let client = match reqwest::Client::builder().timeout(REFRESH_TIMEOUT).build() {
+        Ok(client) => client,
+        Err(e) => {
+            log::warn!("[steam-session] api verify client: {e}");
+            return RefreshVerify::Unavailable;
+        }
+    };
+    let form = [("refresh_token", refresh_token), ("steamid", steam_id)];
+    let response = match client.post(GENERATE_URL).form(&form).send().await {
+        Ok(response) => response,
+        Err(e) => {
+            log::warn!("[steam-session] api verify request failed: {e}");
+            return RefreshVerify::Unavailable;
+        }
+    };
+    let status = response.status().as_u16();
+    let eresult = response
+        .headers()
+        .get("x-eresult")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string);
+    let verdict = classify_http_result(status, eresult.as_deref());
+    if verdict == RefreshVerify::Valid {
+        let body: serde_json::Value = match response.json().await {
+            Ok(body) => body,
+            Err(_) => return RefreshVerify::Unavailable,
+        };
+        let has_token = body
+            .pointer("/response/access_token")
+            .and_then(|value| value.as_str())
+            .map(|value| !value.is_empty())
+            .unwrap_or(false);
+        if !has_token {
+            log::warn!("[steam-session] api verify returned 200 without an access token");
+            return RefreshVerify::Rejected;
+        }
+    }
+    log::info!(
+        "[steam-session] api verify: status={status} eresult={:?} -> {:?}",
+        eresult,
+        verdict
+    );
+    verdict
+}
+
 /// CM transport: log on with the refresh token, then call the unified service.
 async fn refresh_via_cm(
     account_name: &str,
@@ -152,6 +228,16 @@ async fn refresh_via_http(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn classify_http_result_covers_valid_rejected_and_unavailable() {
+        assert_eq!(classify_http_result(200, None), RefreshVerify::Valid);
+        assert_eq!(classify_http_result(200, Some("1")), RefreshVerify::Valid);
+        assert_eq!(classify_http_result(403, Some("15")), RefreshVerify::Rejected);
+        assert_eq!(classify_http_result(401, None), RefreshVerify::Rejected);
+        assert_eq!(classify_http_result(500, None), RefreshVerify::Unavailable);
+        assert_eq!(classify_http_result(200, Some("2")), RefreshVerify::Unavailable);
+    }
 
     #[test]
     fn token_pair_keeps_optional_refresh_token() {

@@ -6,11 +6,13 @@ import WorkshopFilterDrawer from "@/components/workshop/WorkshopFilterDrawer";
 import Pagination from "@/components/workshop/Pagination";
 import WorkshopCard from "@/components/workshop/WorkshopCard";
 import WorkshopGrid from "@/components/workshop/WorkshopGrid";
+import WorkshopUnavailable from "@/components/workshop/WorkshopUnavailable";
 import DetailsPanel from "@/components/common/DetailsPanel";
 import { SkeletonCard } from "@/components/common/Skeleton";
 import { useFiltersStore } from "@/stores/filters";
 import { useAppStore } from "@/stores/app";
 import { pushToast } from "@/stores/toasts";
+import { useRefreshStore } from "@/stores/refresh";
 import { usePaginationContext } from "@/hooks/usePaginationContext";
 import { useWorkshopPage } from "@/hooks/useWorkshopPage";
 import { describeDownloadError } from "@/lib/errors";
@@ -44,7 +46,7 @@ export default function WorkshopView() {
     scrollContainerRef.current?.scrollTo({ top: 0, behavior: "smooth" });
   }, [filters.page]);
 
-  const { page, loading } = useWorkshopPage({
+  const { page, loading, error } = useWorkshopPage({
     cmd: "workshop_browse",
     filters,
     mockKind: "workshop",
@@ -96,7 +98,9 @@ export default function WorkshopView() {
       <div className="relative flex flex-1 overflow-hidden">
         <WorkshopFilterDrawer open={showAdvanced} />
         <div ref={scrollContainerRef} className="flex-1 overflow-auto px-4 pt-3 pb-20">
-          {loading ? (
+          {error ? (
+            <WorkshopUnavailable onRetry={() => useRefreshStore.getState().trigger()} />
+          ) : loading ? (
             <div className="grid grid-cols-[repeat(auto-fill,minmax(190px,1fr))] gap-3">
               {Array.from({ length: 30 }).map((_, i) => (
                 <SkeletonCard key={i} />
