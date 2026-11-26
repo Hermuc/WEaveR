@@ -5,3 +5,8 @@ dist
 # Tauri
 src-tauri/target
 src-tauri/gen
+
+# Vendored crates are built in place during `cargo check`/`test`; their
+# build artifacts and lockfile must not be committed.
+src-tauri/vendor/*/target
+src-tauri/vendor/*/Cargo.lock

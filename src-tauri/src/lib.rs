@@ -165,6 +165,7 @@ pub fn run() {
             commands::we::we_open_playlist,
             commands::we::we_open_profile,
             commands::workshop::workshop_browse,
+            commands::workshop::workshop_browse_sized,
             commands::workshop::workshop_browse_collections,
             commands::workshop::workshop_get_item,
             commands::workshop::workshop_get_collection,

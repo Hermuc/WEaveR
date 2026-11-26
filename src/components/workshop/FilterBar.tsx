@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import Select from "@/components/common/Select";
 import { Tooltip } from "@/components/common/Tooltip";
 import SearchOptionsPopover from "./SearchOptionsPopover";
+import SizeRangeInputs from "./SizeRangeInputs";
 import {
   SORT_KEYS,
   SORT_OPTIONS,
@@ -25,7 +26,17 @@ interface ActiveChip {
   onRemove: () => void;
 }
 
-export default function FilterBar() {
+/**
+ * The Workshop filter bar.
+ *
+ * `showSizeFilter` is opt-in because `CollectionsView` renders this same bar
+ * but has no per-item file size — a size input there would be a dead control.
+ */
+export default function FilterBar({
+  showSizeFilter = false,
+}: {
+  showSizeFilter?: boolean;
+} = {}) {
   const { t, i18n } = useTranslation();
   const filters = useFiltersStore((s) => s.filters);
   const setFilters = useFiltersStore((s) => s.setFilters);
@@ -273,6 +284,8 @@ export default function FilterBar() {
   return (
     <div className="relative z-30 flex flex-col items-center gap-2 px-4 py-3 pb-1.5">
       <div className="flex flex-wrap items-center justify-center gap-3">
+        {/* File-size range: only where the caller opted in. */}
+        {showSizeFilter && <SizeRangeInputs />}
         {/* Search Input with Smart Dropdown */}
         <div className="relative z-20 w-96" ref={searchContainerRef}>
           <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-subtle" />

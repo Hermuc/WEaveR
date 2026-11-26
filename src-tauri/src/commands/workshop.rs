@@ -11,6 +11,34 @@ pub async fn workshop_browse(
     state.workshop.browse(&filters).await.map_err(map_err)
 }
 
+/// Browse the Workshop with a file-size filter.
+///
+/// Separate from [`workshop_browse`] on purpose: the unfiltered path must stay
+/// a single page fetch, and the filtered path walks several pages. Keeping them
+/// apart means no existing caller changes behaviour.
+///
+/// NOTE for callers: Tauri 2 maps these snake_case arguments to camelCase on
+/// the wire, so the frontend must send `minMb` / `maxMb` / `perPage`. Sending
+/// `min_mb` silently arrives as `None` — the command runs, the filter just
+/// never activates.
+#[command]
+pub async fn workshop_browse_sized(
+    state: AppStateHandle<'_>,
+    filters: WorkshopFilters,
+    min_mb: Option<f64>,
+    max_mb: Option<f64>,
+    per_page: Option<u32>,
+) -> Result<WorkshopPage, String> {
+    let range = crate::services::workshop::size_index::SizeRange::from_mb(min_mb, max_mb);
+    // 30 matches Steam's physical page, so a filtered page looks like a normal
+    // one and the grid layout does not change.
+    let per_page = per_page.unwrap_or(30) as usize;
+    state
+        .workshop
+        .browse_sized(&filters, range, per_page)
+        .await
+        .map_err(map_err)
+}
 #[command]
 pub async fn workshop_browse_collections(
     state: AppStateHandle<'_>,

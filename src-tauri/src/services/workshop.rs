@@ -5,7 +5,9 @@
 //! and persisted on disk.
 
 pub mod debug;
+pub mod file_sizes;
 pub mod parser;
+pub mod size_index;
 pub mod url_builder;
 pub mod webview;
 
@@ -85,6 +87,20 @@ pub struct WorkshopPage {
     pub current_page: u32,
     pub total_pages: u32,
     pub total_items: u64,
+    /// Present only when a file-size filter produced this page. `None` on
+    /// every unfiltered path, so existing callers see an unchanged shape.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size_filter: Option<WorkshopSizeMeta>,
+}
+
+/// What the UI needs to explain a short page produced by a size filter.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct WorkshopSizeMeta {
+    /// Matches discovered so far across the scanned physical pages.
+    pub discovered: u64,
+    /// True when the scan stopped at the page budget with fewer results than
+    /// a full page, so the UI must say "these are all we found".
+    pub truncated: bool,
 }
 
 /// Snapshot of the Steam account that the Workshop client is scraping as.
@@ -130,6 +146,9 @@ pub struct WorkshopClient {
     cookie_jar: Arc<Jar>,
     page_cache: Arc<Mutex<lru::LruCache<String, WorkshopPage>>>,
     item_cache: Arc<Mutex<lru::LruCache<String, WorkshopItem>>>,
+    /// Size-filtered scan state, keyed by "filter + sort + search" so two
+    /// different filters never share discovered ids.
+    size_indexes: Arc<Mutex<lru::LruCache<String, size_index::SizeIndex>>>,
 }
 
 impl WorkshopClient {
@@ -157,6 +176,11 @@ impl WorkshopClient {
             item_cache: Arc::new(Mutex::new(lru::LruCache::new(
                 std::num::NonZeroUsize::new(600).expect("cache ttl seconds > 0"),
             ))),
+            size_indexes: Arc::new(Mutex::new(lru::LruCache::new(
+                // A handful of concurrent filters is plenty; each entry is
+                // just a list of ids plus a small page set.
+                std::num::NonZeroUsize::new(8).expect("cache size > 0"),
+            ))),
         }
     }
 
@@ -171,6 +195,9 @@ impl WorkshopClient {
     pub fn clear_caches(&self) {
         self.page_cache.lock().clear();
         self.item_cache.lock().clear();
+        // The size index caches ids discovered from those pages; stale pages
+        // must not keep serving stale ids.
+        self.size_indexes.lock().clear();
     }
 
     /// Ask Steam itself who we're logged in as, by following the redirect on
@@ -380,6 +407,147 @@ impl WorkshopClient {
         self.browse_url(&url, filters.page.max(1)).await
     }
 
+
+    /// Browse with a file-size filter, filling each logical page with matches.
+    ///
+    /// Steam gives 30 items per physical page and ignores size-related URL
+    /// parameters, so a size filter cannot be applied to one page in isolation:
+    /// we walk forward, keep what matches, and re-slice. The scan state is
+    /// cached per filter so page 2 does not re-walk page 1.
+    ///
+    /// `filters.page` is the **logical** page. When no size bound is set this
+    /// delegates straight to [`browse`], which is what keeps the unfiltered path
+    /// byte-for-byte identical to before.
+    pub async fn browse_sized(
+        &self,
+        filters: &WorkshopFilters,
+        range: size_index::SizeRange,
+        per_page: usize,
+    ) -> anyhow::Result<WorkshopPage> {
+        if !range.is_active() {
+            return self.browse(filters).await;
+        }
+
+        let logical_page = filters.page.max(1);
+        let per_page = per_page.max(1);
+        let needed = logical_page as usize * per_page;
+
+        // The scan key must capture everything that changes which ids Steam
+        // would return. Rather than enumerate the filter fields (and silently
+        // forget one — `age_rating` was missing, so switching from "Any" to
+        // "Mature" reused the Any scan and showed its results), derive the key
+        // from the actual browse URL with the page number stripped. That way
+        // every tag, flag and date range is covered by construction.
+        let key_filters = WorkshopFilters {
+            page: 1,
+            ..filters.clone()
+        };
+        let key = format!(
+            "{}|{}|{}",
+            url_builder::build_browse(&key_filters),
+            range.min_bytes.map(|v| v.to_string()).unwrap_or_default(),
+            range.max_bytes.map(|v| v.to_string()).unwrap_or_default(),
+        );
+
+        let mut index = {
+            let mut cache = self.size_indexes.lock();
+            match cache.pop(&key) {
+                Some(existing) => existing,
+                None => size_index::SizeIndex::default(),
+            }
+        };
+
+        // Build the physical-page URL once; only `p` changes per page.
+        let base_filters = WorkshopFilters {
+            page: 1,
+            ..filters.clone()
+        };
+
+        let result = index
+            .fill(needed, |physical_page| {
+                let mut page_filters = base_filters.clone();
+                page_filters.page = physical_page;
+                let url = url_builder::build_browse(&page_filters);
+                async move {
+                    let page = self
+                        .browse_url(&url, physical_page)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    // Warm the item cache with what this page already gave us.
+                    // Without this, resolving a filtered page would fetch every
+                    // detail page one by one — measured at ~840 ms each, so 30
+                    // items would cost ~25 s.
+                    {
+                        let mut cache = self.item_cache.lock();
+                        for item in &page.items {
+                            cache.put(item.pubfileid.clone(), item.clone());
+                        }
+                    }
+
+                    // An empty page means Steam ran out; a page whose items all
+                    // fell outside the range is *not* the end and must be
+                    // skipped past, or a sparse filter stops after one page.
+                    let page_empty = page.items.is_empty();
+                    let ids: Vec<String> =
+                        page.items.iter().map(|i| i.pubfileid.clone()).collect();
+                    let sizes =
+                        file_sizes::fetch_file_sizes(&self.client, &ids).await;
+                    // Keep only ids inside the range. Unknown sizes are kept by
+                    // `accepts`, which is why they stay in this list.
+                    let kept: Vec<String> = ids
+                        .into_iter()
+                        .filter(|id| range.accepts(sizes.get(id).copied()))
+                        .collect();
+                    Ok((kept, sizes, page_empty))
+                }
+            })
+            .await;
+
+        let page = index.page(logical_page, per_page);
+        let discovered = index.matched_len();
+        let truncated = index.truncated();
+
+        // Put the state back even on error: a partially walked index is still
+        // useful, and dropping it would make the next request start over.
+        self.size_indexes.lock().put(key, index);
+
+        // `fill` reports a plain String; this function speaks anyhow.
+        result.map_err(anyhow::Error::msg)?;
+
+        // Resolve the ids into full items. Prefer the page cache (already
+        // parsed), then fall back to a detail fetch for anything missing.
+        let mut items = Vec::with_capacity(page.ids.len());
+        for id in &page.ids {
+            if let Some(item) = self.cached_item(id) {
+                items.push(item);
+                continue;
+            }
+            if let Ok(item) = self.item_details(id).await {
+                items.push(item);
+            }
+        }
+
+        Ok(WorkshopPage {
+            total_items: discovered as u64,
+            total_pages: ((discovered + per_page - 1) / per_page).max(1) as u32,
+            current_page: logical_page,
+            items,
+            size_filter: Some(WorkshopSizeMeta {
+                discovered: discovered as u64,
+                truncated,
+            }),
+        })
+    }
+
+    /// Cheap lookup in the parsed-page cache for one id.
+    fn cached_item(&self, pubfileid: &str) -> Option<WorkshopItem> {
+        // `item_cache` only holds detail pages; the browse cache holds pages.
+        if let Some(item) = self.item_cache.lock().get(pubfileid) {
+            return Some(item.clone());
+        }
+        None
+    }
+
     async fn browse_url(&self, url: &str, page: u32) -> anyhow::Result<WorkshopPage> {
         if let Some(cached) = self.page_cache.lock().get(url) {
             return Ok(cached.clone());
@@ -459,3 +627,85 @@ impl WorkshopClient {
 // ── Timing constants ──────────────────────────────────────────
 /// HTTP timeout for a workshop page request.
 const WORKSHOP_REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
+
+
+#[cfg(test)]
+mod size_key_tests {
+    use crate::services::workshop::url_builder;
+    use crate::workshop::WorkshopFilters;
+
+    /// The scan cache key is derived from the browse URL with the page number
+    /// pinned, so every filter that affects which items Steam returns is part of
+    /// the key by construction.
+    ///
+    /// Regression: the key used to enumerate fields by hand and omitted
+    /// `age_rating`, so switching from "Any" to "Mature" reused the previous
+    /// scan and displayed its results — the Mature filter looked broken.
+    fn key(filters: &WorkshopFilters) -> String {
+        let pinned = WorkshopFilters {
+            page: 1,
+            ..filters.clone()
+        };
+        url_builder::build_browse(&pinned)
+    }
+
+    fn base() -> WorkshopFilters {
+        WorkshopFilters {
+            sort: "trend".into(),
+            days: "7".into(),
+            page: 1,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn age_rating_changes_the_key() {
+        let any = base();
+        let mature = WorkshopFilters {
+            age_rating: "Mature".into(),
+            ..base()
+        };
+        assert_ne!(key(&any), key(&mature), "age rating must affect the scan key");
+    }
+
+    #[test]
+    fn other_tags_change_the_key() {
+        let plain = base();
+        for mutate in [
+            (|f: &mut WorkshopFilters| f.category = "Scene".into()) as fn(&mut WorkshopFilters),
+            |f: &mut WorkshopFilters| f.type_tag = "Video".into(),
+            |f: &mut WorkshopFilters| f.resolution = "1920 x 1080".into(),
+            |f: &mut WorkshopFilters| f.genre_tags.push("Anime".into()),
+            |f: &mut WorkshopFilters| f.misc_tags.push("HDR".into()),
+            |f: &mut WorkshopFilters| f.excluded_misc_tags.push("3D".into()),
+            |f: &mut WorkshopFilters| f.search = "cat".into(),
+            |f: &mut WorkshopFilters| f.days = "30".into(),
+        ] {
+            let mut changed = base();
+            mutate(&mut changed);
+            assert_ne!(key(&plain), key(&changed), "every filter must affect the key");
+        }
+    }
+
+    #[test]
+    fn the_same_filters_produce_the_same_key() {
+        // Otherwise every render would start a fresh scan.
+        let filters = WorkshopFilters {
+            age_rating: "Mature".into(),
+            ..base()
+        };
+        assert_eq!(key(&filters), key(&filters));
+    }
+
+    #[test]
+    fn the_page_number_does_not_change_the_key() {
+        // Page is pinned to 1 inside the key: pages are scanned sequentially
+        // into one index, so they must share a key.
+        let first = base();
+        let fifth = WorkshopFilters {
+            page: 5,
+            ..base()
+        };
+        assert_eq!(key(&first), key(&fifth));
+    }
+}

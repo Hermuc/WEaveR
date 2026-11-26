@@ -76,6 +76,8 @@ pub fn parse_browse(html: &str, current_page: u32) -> WorkshopPage {
         current_page,
         total_pages: total_pages.max(1),
         total_items,
+        // Unfiltered browse: no size metadata.
+        size_filter: None,
     }
 }
 

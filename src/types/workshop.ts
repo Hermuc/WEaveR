@@ -23,11 +23,24 @@ export interface WorkshopItem {
   collections?: CollectionRef[];
 }
 
+export interface WorkshopSizeMeta {
+  /** Matches discovered so far across the scanned physical pages. */
+  discovered: number;
+  /**
+   * True when the scan stopped at its page budget with fewer results than a
+   * full page, so the UI must say "these are all we found" rather than
+   * implying the list ended naturally.
+   */
+  truncated: boolean;
+}
+
 export interface WorkshopPage {
   items: WorkshopItem[];
   total_pages: number;
   total_items: number;
   current_page: number;
+  /** Present only when a file-size filter produced this page. */
+  size_filter?: WorkshopSizeMeta | null;
 }
 
 export interface CollectionInfo {

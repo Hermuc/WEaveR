@@ -22,6 +22,14 @@ export interface WorkshopFilters {
   updated_date_range_end: string;
   search_text_mode: number;
   page: number;
+  /**
+   * File-size filter bounds in MB, as typed by the user. Empty string means
+   * "no bound". These are frontend-only: the backend ignores them on the
+   * normal browse command and takes them as explicit command arguments on
+   * `workshop_browse_sized`.
+   */
+  size_min_mb: string;
+  size_max_mb: string;
 }
 
 export const DEFAULT_FILTERS: WorkshopFilters = {
@@ -47,6 +55,8 @@ export const DEFAULT_FILTERS: WorkshopFilters = {
   updated_date_range_end: "",
   search_text_mode: 0,
   page: 1,
+  size_min_mb: "",
+  size_max_mb: "",
 };
 
 interface FiltersState {

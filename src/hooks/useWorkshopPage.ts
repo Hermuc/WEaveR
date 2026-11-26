@@ -52,6 +52,12 @@ interface UseWorkshopPageOptions {
   preloadNext?: boolean;
   /** Browser-only fallback; required when running outside Tauri. */
   mockKind?: "workshop" | "collection";
+  /**
+   * Extra arguments merged into the invoke payload. Used by the size-filtered
+   * browse command; omitted by every existing caller, so their payloads are
+   * unchanged.
+   */
+  extraArgs?: Record<string, unknown>;
 }
 
 interface UseWorkshopPageResult {
@@ -78,6 +84,7 @@ export function useWorkshopPage({
   cacheScope = null,
   preloadNext = true,
   mockKind,
+  extraArgs,
 }: UseWorkshopPageOptions): UseWorkshopPageResult {
   const steamPhase = useSteamSessionStore((s) => s.phase);
   const refreshCounter = useRefreshStore((s) => s.counter);
@@ -86,7 +93,15 @@ export function useWorkshopPage({
   const [error, setError] = useState<string | null>(null);
   const cache = useRef<Map<string, WorkshopPage>>(new Map());
 
-  const filtersKey = useMemo(() => JSON.stringify(filters), [filters]);
+  // `extraArgs` participates in the cache key: two size ranges are different
+  // result sets even though `filters` is identical.
+  const filtersKey = useMemo(
+    () =>
+      extraArgs && Object.keys(extraArgs).length > 0
+        ? `${JSON.stringify(filters)}|${JSON.stringify(extraArgs)}`
+        : JSON.stringify(filters),
+    [filters, extraArgs],
+  );
 
   // A forced refresh clears the preload cache: its pages may be stale.
   useEffect(() => {
@@ -122,7 +137,10 @@ export function useWorkshopPage({
         }
         let result = cached;
         if (!result) {
-          const outcome = await tryInvokeAction<WorkshopPage>(cmd, { filters });
+          const outcome = await tryInvokeAction<WorkshopPage>(cmd, {
+            filters,
+            ...(extraArgs ?? {}),
+          });
           if (!outcome.ok) {
             if (!active) return;
             setPage(null);
@@ -149,11 +167,16 @@ export function useWorkshopPage({
             ...filters,
             page: filters.page + 1,
           };
-          const nextKey = cacheScope
-            ? `${JSON.stringify(nextFilters)}|${cacheScope}`
-            : JSON.stringify(nextFilters);
+          const nextBase =
+            extraArgs && Object.keys(extraArgs).length > 0
+              ? `${JSON.stringify(nextFilters)}|${JSON.stringify(extraArgs)}`
+              : JSON.stringify(nextFilters);
+          const nextKey = cacheScope ? `${nextBase}|${cacheScope}` : nextBase;
           if (!cache.current.has(nextKey)) {
-            void tryInvoke<WorkshopPage>(cmd, { filters: nextFilters }).then(
+            void tryInvoke<WorkshopPage>(cmd, {
+              filters: nextFilters,
+              ...(extraArgs ?? {}),
+            }).then(
               (next) => {
                 if (next) cache.current.set(nextKey, next);
               },
@@ -167,7 +190,7 @@ export function useWorkshopPage({
       active = false;
       clearTimeout(timer);
     };
-  }, [enabled, cmd, filters, filtersKey, cacheScope, preloadNext, mockKind, refreshCounter, steamPhase]);
+  }, [enabled, cmd, filters, filtersKey, cacheScope, preloadNext, mockKind, extraArgs, refreshCounter, steamPhase]);
 
   return { page, loading, error, cache };
 }
