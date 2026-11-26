@@ -161,6 +161,9 @@ export default {
     tags: "标签：",
     showing_wallpapers: "显示第 {{start}}-{{end}} 张，共 {{total}} 张壁纸",
     no_wallpapers_found: "未找到壁纸",
+    size_filter_no_results: "当前范围没有找到结果，可放宽体积范围试试。",
+    size_filter_discovered: "已发现 {{discovered}} 条符合体积条件",
+    size_filter_truncated: "符合条件的结果较少，已显示全部 {{discovered}} 条，可放宽范围。",
     showing_collections: "显示第 {{start}}-{{end}} 个，共 {{total}} 个合集",
     no_collections_found: "未找到合集",
     loading_dots: "加载中…",
@@ -387,6 +390,9 @@ export default {
     open_parser: "打开解析器",
     relogin: "重新登录",
     login_button: "登录",
+    login_waiting: "等待确认…",
+    login_mobile_confirm:
+      "请在手机上确认登录：打开 Steam 手机应用 → 确认 → 在「Steam Guard」中批准本次登录。此窗口会等待最多 5 分钟。",
     login_title: "Steam 登录",
     steam_window_title: "请在弹出的 Steam 窗口中完成登录",
     steam_window_help:
@@ -491,6 +497,11 @@ export default {
       Questionable: "内容存疑",
       Mature: "成人",
     },
+    size_min_placeholder: "最小",
+    size_max_placeholder: "最大",
+    size_min_aria: "最小体积（MB）",
+    size_commit_hint: "输入后按回车生效",
+    size_max_aria: "最大体积（MB）",
     resolution: {
       empty: "任意",
       Standard_Definition: "标准清",

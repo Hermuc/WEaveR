@@ -26,6 +26,20 @@ pub enum LoginError {
 
     #[error("no CM servers available")]
     NoCmServers,
+
+    /// The user never approved the sign-in (mobile tap / QR scan) before the
+    /// caller's deadline expired. Distinct from [`Transport`] so the UI can say
+    /// "you did not confirm in time" instead of blaming the network.
+    ///
+    /// [`Transport`]: LoginError::Transport
+    #[error("timed out waiting for confirmation after {elapsed:?}")]
+    ConfirmationTimeout { elapsed: std::time::Duration },
+
+    /// The CM connection dropped and could not be re-established within the
+    /// retry budget. The auth session itself is still valid server-side, so a
+    /// fresh sign-in attempt can succeed immediately.
+    #[error("connection lost while waiting for confirmation: {last_error}")]
+    ConnectionLost { last_error: String },
 }
 
 #[cfg(test)]
@@ -50,6 +64,28 @@ mod tests {
             steamroom::Error::Connection(steamroom::error::ConnectionError::DnsResolutionFailed);
         let err: LoginError = inner.into();
         assert!(matches!(err, LoginError::Transport(_)));
+    }
+
+    #[test]
+    fn confirmation_timeout_names_the_elapsed_time() {
+        let err = LoginError::ConfirmationTimeout {
+            elapsed: std::time::Duration::from_secs(300),
+        };
+        assert_eq!(
+            err.to_string(),
+            "timed out waiting for confirmation after 300s"
+        );
+    }
+
+    #[test]
+    fn connection_lost_keeps_the_last_transport_error() {
+        let err = LoginError::ConnectionLost {
+            last_error: "disconnected".into(),
+        };
+        assert_eq!(
+            err.to_string(),
+            "connection lost while waiting for confirmation: disconnected"
+        );
     }
 
     #[test]

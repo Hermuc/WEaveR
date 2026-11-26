@@ -161,6 +161,10 @@ export default {
     tags: "Tags:",
     showing_wallpapers: "Showing {{start}}-{{end}} of {{total}} wallpapers",
     no_wallpapers_found: "No wallpapers found",
+    size_filter_no_results: "Nothing in this range. Try widening the size bounds.",
+    size_filter_discovered: "{{discovered}} wallpapers match the size filter",
+    size_filter_truncated:
+      "Only {{discovered}} matched within the search budget. Widen the range for more.",
     showing_collections: "Showing {{start}}-{{end}} of {{total}} collections",
     no_collections_found: "No collections found",
     loading_dots: "Loading...",
@@ -390,6 +394,9 @@ export default {
     open_parser: "Open Parser",
     relogin: "Relogin",
     login_button: "Login",
+    login_waiting: "Waiting…",
+    login_mobile_confirm:
+      "Confirm the sign-in on your phone: open the Steam mobile app, then approve this login under Steam Guard. This dialog waits up to 5 minutes.",
     login_title: "Steam Login",
     steam_window_title: "Finish signing in inside the Steam window",
     steam_window_help:
@@ -494,6 +501,11 @@ export default {
       Questionable: "Questionable",
       Mature: "Mature",
     },
+    size_min_placeholder: "Min",
+    size_max_placeholder: "Max",
+    size_min_aria: "Minimum size in MB",
+    size_commit_hint: "Press Enter to apply",
+    size_max_aria: "Maximum size in MB",
     resolution: {
       empty: "Any",
       Standard_Definition: "SD",

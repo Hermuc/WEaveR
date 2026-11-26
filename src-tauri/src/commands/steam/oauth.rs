@@ -140,7 +140,11 @@ pub async fn steam_oauth_begin(
             })
         }
         CredentialsLoginFlow::NeedsMobileConfirm(challenge) => {
-            // Wait for the tap inside this call; the UI shows a spinner meanwhile.
+            // Tell the UI what it is waiting for. Without this the dialog shows
+            // a bare spinner for up to five minutes and the user has no way to
+            // know a phone tap is required.
+            let _ = state.app_handle.emit("steam-login-awaiting-mobile", ());
+            // Wait for the tap inside this call.
             let approved = challenge
                 .wait_for_confirmation()
                 .await

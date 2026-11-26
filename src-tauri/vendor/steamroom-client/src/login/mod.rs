@@ -85,7 +85,7 @@ pub(crate) const STEAM_CLIENT_PLATFORM_TYPE: i32 = 1;
 
 /// Configuration shared by `LoginBuilder` and `PreparedLoginBuilder`.
 /// Private — the public API exposes setters individually.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub(crate) struct BuilderConfig {
     pub(crate) device_name: Option<String>,
     pub(crate) cell_id: u32,
@@ -115,6 +115,53 @@ impl Default for TransportConfig {
             prefer: Protocol::Tcp,
             allow_fallback: true,
             recorder: None,
+        }
+    }
+}
+
+/// A recipe for rebuilding the CM connection after Steam drops it.
+///
+/// An auth session is keyed server-side by `client_id` / `request_id`, not by
+/// the socket, so a freshly connected client can keep polling the same
+/// session. That is what lets a mobile-confirmation wait survive the CM
+/// reaping an idle connection.
+///
+/// `None` (see [`TransportConfig::reconnect_hint`]) means the caller supplied
+/// its own client and cannot rebuild one; the poll then only has its deadline
+/// to fall back on.
+#[derive(Clone)]
+pub(crate) struct ReconnectHint {
+    prefer: Protocol,
+    allow_fallback: bool,
+}
+
+impl ReconnectHint {
+    /// Dial a fresh CM and drive it to `Ready`.
+    ///
+    /// Deliberately does NOT carry the recorder: a recording is a single
+    /// session capture, and appending a second connection to it would produce
+    /// a capture that no longer replays.
+    pub(crate) async fn connect(&self) -> Result<SteamClient<Ready>, LoginError> {
+        Ok(connect_auto(self.prefer, self.allow_fallback, None)
+            .await?
+            .prepare()
+            .await?)
+    }
+}
+
+impl TransportConfig {
+    /// How to rebuild this connection, or `None` when it was caller-supplied.
+    pub(crate) fn reconnect_hint(&self) -> Option<ReconnectHint> {
+        match self {
+            TransportConfig::Auto {
+                prefer,
+                allow_fallback,
+                ..
+            } => Some(ReconnectHint {
+                prefer: *prefer,
+                allow_fallback: *allow_fallback,
+            }),
+            TransportConfig::Provided(_) => None,
         }
     }
 }

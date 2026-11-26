@@ -1,7 +1,6 @@
 use crate::login::BuilderConfig;
 use crate::login::STEAM_CLIENT_PLATFORM_TYPE;
 use crate::login::TransportConfig;
-use crate::login::credentials::poll_until_tokens;
 use crate::login::error::LoginError;
 use crate::login::establish_ready_client;
 use crate::login::terminal::ApprovedAuth;
@@ -30,11 +29,17 @@ pub struct QrLoginFlow {
     request_id: Vec<u8>,
     poll_interval: f32,
     allowed_kinds: Vec<GuardType>,
+    /// How to rebuild the CM connection if Steam drops it mid-scan.
+    reconnect: Option<crate::login::ReconnectHint>,
 }
 
 impl QrLogin {
     /// Connect (or accept BYO client) and call `BeginAuthSessionViaQR`.
     pub async fn begin(self) -> Result<QrLoginFlow, LoginError> {
+        // Take the reconnect recipe before the transport is consumed:
+        // `establish_ready_client` moves it, and a QR scan is exactly the kind
+        // of wait where the CM may drop the socket.
+        let reconnect = self.transport.reconnect_hint();
         let client = establish_ready_client(self.transport).await?;
 
         let device_name = self
@@ -50,6 +55,7 @@ impl QrLogin {
         let session = client.begin_auth_session_via_qr(req).await?;
 
         Ok(QrLoginFlow {
+            reconnect,
             client,
             config: self.config,
             challenge_url: session
@@ -83,15 +89,19 @@ impl QrLoginFlow {
     /// Poll `PollAuthSessionStatus` until the user scans + approves and
     /// tokens are returned.
     pub async fn wait_for_scan(self) -> Result<ApprovedAuth, LoginError> {
-        let tokens = poll_until_tokens(
-            &self.client,
+        // Same long-wait problem as the mobile-confirmation path: the user has
+        // to pick up their phone and scan, which is plenty of time for the CM
+        // to reap the idle socket.
+        let (tokens, client) = crate::login::credentials::poll_until_tokens_with_policy(
+            self.client,
             self.client_id,
             &self.request_id,
-            self.poll_interval,
+            crate::login::credentials::PollPolicy::from_interval(self.poll_interval),
+            self.reconnect,
         )
         .await?;
         Ok(ApprovedAuth {
-            client: self.client,
+            client,
             config: self.config,
             tokens,
         })

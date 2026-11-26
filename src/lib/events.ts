@@ -33,4 +33,7 @@ export const EVENTS = {
 
   // --- Steam webview session ---
   STEAM_LOGIN_SUCCESS: "steam-login-success",
+  /// Emitted when the OAuth sign-in reached the Steam Guard step that needs a
+  /// tap in the Steam mobile app, so the dialog can say so instead of spinning.
+  STEAM_LOGIN_AWAITING_MOBILE: "steam-login-awaiting-mobile",
 } as const;

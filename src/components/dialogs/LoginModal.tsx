@@ -7,6 +7,9 @@ import { pushToast } from "@/stores/toasts";
 import { useSteamSessionStore, SteamAccountInfo } from "@/stores/steam-session";
 import { useAppStore } from "@/stores/app";
 import { triggerGlobalRefresh } from "@/stores/refresh";
+import { listen } from "@tauri-apps/api/event";
+import { EVENTS } from "@/lib/events";
+import { inTauri } from "@/lib/tauri";
 
 export default function LoginModal({
   open,
@@ -25,6 +28,32 @@ export default function LoginModal({
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
+  // Set while we are waiting for the user to approve the sign-in on their
+  // phone. `steam_oauth_begin` blocks for that whole wait, so without a
+  // dedicated hint the dialog just shows a spinner and the user cannot tell
+  // whether they are supposed to do something.
+  const [awaitingMobile, setAwaitingMobile] = useState(false);
+  // The backend blocks inside `steam_oauth_begin` while the user taps on their
+  // phone, so it announces that state instead of returning it. Listening here
+  // keeps the UI honest: a spinner with no explanation looks like a hang.
+  useEffect(() => {
+    if (!inTauri) return;
+    let unlisten: (() => void) | undefined;
+    let active = true;
+    void listen(EVENTS.STEAM_LOGIN_AWAITING_MOBILE, () => {
+      setAwaitingMobile(true);
+    }).then((fn) => {
+      if (active) {
+        unlisten = fn;
+      } else {
+        fn();
+      }
+    });
+    return () => {
+      active = false;
+      if (unlisten) unlisten();
+    };
+  }, []);
   // One-shot guard: `finalizeLogin` is reached from three paths (probe poll,
   // QR finalize, credential submit). Without this it could run twice and, in
   // the old build, each run's credential-save triggered another sign-in which
@@ -308,6 +337,7 @@ export default function LoginModal({
     setErrorMsg(null);
     setBusy(true);
     busyRef.current = true;
+    setAwaitingMobile(false);
     try {
       // Sign in through Steam's OAuth API rather than by filling the web form.
       //
@@ -343,6 +373,7 @@ export default function LoginModal({
       );
     } finally {
       setBusy(false);
+      setAwaitingMobile(false);
       busyRef.current = false;
     }
   };
@@ -386,6 +417,15 @@ export default function LoginModal({
                 {errorMsg && (
                   <div className="mb-0 flex items-center gap-3 rounded-lg bg-red-500/10 p-3 text-red-500">
                     <p className="text-xs">{errorMsg}</p>
+                  </div>
+                )}
+                {awaitingMobile && (
+                  <div className="flex items-start gap-3 rounded-lg bg-primary/10 p-3 text-primary">
+                    <span className="mt-0.5 inline-block size-3.5 shrink-0 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                    <p className="text-xs leading-relaxed">
+                      {t("settings.login_mobile_confirm") ||
+                        "请在手机上确认登录：打开 Steam 手机应用 → 确认 → 在「Steam Guard」中批准本次登录。此窗口会等待最多 5 分钟。"}
+                    </p>
                   </div>
                 )}
                 <form onSubmit={handleCredentialsSubmit} className="space-y-4">
@@ -443,7 +483,9 @@ export default function LoginModal({
                         {busy && (
                           <span className="inline-block size-3.5 animate-spin rounded-full border-2 border-current border-t-transparent" />
                         )}
-                        {t("settings.login_button") || "Login"}
+                        {awaitingMobile
+                          ? t("settings.login_waiting") || "Waiting…"
+                          : t("settings.login_button") || "Login"}
                       </button>
                     </div>
                   </div>
