@@ -13,13 +13,11 @@ use tokio::process::Child;
 use tokio::sync::Mutex as AsyncMutex;
 
 mod helpers;
+mod rules;
 
-use crate::services::download_protocol::{
-    classify_progress_line, is_steam_guard_prompt,
-};
-use helpers::{build_depot_cmd, emit_terminal};
+use crate::services::download_protocol::{classify_progress_line, is_steam_guard_prompt};
 use crate::services::fs_util::{dir_has_files, dir_has_project};
-
+use helpers::{build_depot_cmd, emit_terminal};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct TaskStatus {
@@ -210,13 +208,7 @@ impl DownloadManager {
                     // failure — this covers slow CM handshakes while still
                     // catching a genuinely hung process.
                     let idle = last_activity.elapsed();
-                    let budget = if download_started {
-                        // Once transferring, stay patient: a stalled-but-alive
-                        // download can legitimately go quiet for a while.
-                        DOWNLOAD_STALL_BUDGET_WITH_PROGRESS
-                    } else {
-                        DOWNLOAD_CONNECT_BUDGET
-                    };
+                    let budget = rules::idle_budget(download_started);
                     if idle >= budget {
                         log::warn!(
                             "No output from DepotDownloader for {}s (started={}); treating as connection failure for {}",
@@ -242,7 +234,8 @@ impl DownloadManager {
                                 if v.needs_code {
                                     app.emit("download://require_2fa", pubfileid.clone()).ok();
                                 } else if v.needs_app_confirm {
-                                    app.emit("download://require_app_confirm", pubfileid.clone()).ok();
+                                    app.emit("download://require_app_confirm", pubfileid.clone())
+                                        .ok();
                                 }
                                 let status = TaskStatus {
                                     pubfileid: pubfileid.clone(),
@@ -308,9 +301,9 @@ impl DownloadManager {
 
                 let output_dir = std::path::Path::new(&output_dir_string);
                 let has_output = dir_has_files(output_dir);
-                let success = (exit_ok || has_output) && !connection_failed;
-
-                if success {
+                if rules::attempt_outcome(exit_ok, has_output, connection_failed)
+                    == rules::AttemptOutcome::Completed
+                {
                     emit_terminal(
                         &app,
                         &pubfileid,
@@ -325,18 +318,15 @@ impl DownloadManager {
                 }
 
                 attempt += 1;
-                current_index = if is_custom {
-                    starting_index
-                } else {
-                    (current_index + 1) % total_accounts
-                };
+                current_index = rules::next_account_index(
+                    current_index,
+                    starting_index,
+                    total_accounts,
+                    is_custom,
+                );
 
-                if attempt >= total_accounts && !infinite_retry {
-                    let status_text = if !stderr_tail.is_empty() {
-                        format!("Failed: {}", stderr_tail.join(" | "))
-                    } else {
-                        "Failed".to_string()
-                    };
+                if rules::retries_exhausted(attempt, total_accounts, infinite_retry) {
+                    let status_text = rules::failure_text(&stderr_tail);
                     emit_terminal(
                         &app,
                         &pubfileid,
@@ -365,7 +355,7 @@ impl DownloadManager {
                 );
                 // Back off briefly before the next account attempt so a
                 // rate-limited login does not hammer Steam.
-                tokio::time::sleep(DOWNLOAD_RETRY_BACKOFF).await;
+                tokio::time::sleep(rules::RETRY_BACKOFF).await;
             }
         });
 
@@ -438,11 +428,3 @@ impl DownloadManager {
         self.app.emit("download://status", status).ok();
     }
 }
-
-// ── Timing constants ──────────────────────────────────────────
-/// Once transferring, allow this much silence before giving up.
-const DOWNLOAD_STALL_BUDGET_WITH_PROGRESS: std::time::Duration = std::time::Duration::from_secs(300);
-/// Before any transfer starts, a shorter silence budget for a dead CM.
-const DOWNLOAD_CONNECT_BUDGET: std::time::Duration = std::time::Duration::from_secs(45);
-/// Back off before retrying with the next account.
-const DOWNLOAD_RETRY_BACKOFF: std::time::Duration = std::time::Duration::from_secs(2);
