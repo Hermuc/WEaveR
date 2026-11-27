@@ -15,6 +15,7 @@ use tokio::sync::Mutex;
 use super::{
     install_cookies_for_window, SteamWebview, LABEL, STEAM_LOGIN_URL, WINDOW_CREATE_TIMEOUT,
 };
+use crate::errors::AppError;
 
 impl SteamWebview {
     pub fn new(app: AppHandle, data_dir: PathBuf, jar: Arc<Jar>) -> Self {
@@ -190,9 +191,9 @@ impl SteamWebview {
         &self,
         steam_id: &str,
         access_token: &str,
-    ) -> Result<(), String> {
+    ) -> Result<(), AppError> {
         let Some(w) = self.app.get_webview_window(LABEL) else {
-            return Err("webview window not ready".into());
+            return Err(AppError::not_found("webview window not ready"));
         };
         let secure =
             crate::accounts::StoredSteamSession::steam_login_secure(steam_id, access_token);
@@ -207,7 +208,7 @@ impl SteamWebview {
                 .collect::<String>()
                 .to_lowercase()
         };
-        install_cookies_for_window(&w, &secure, &session_id)?;
+        install_cookies_for_window(&w, &secure, &session_id).map_err(AppError::from_legacy)?;
         log::info!("[steam-webview] installed saved session cookies");
         Ok(())
     }

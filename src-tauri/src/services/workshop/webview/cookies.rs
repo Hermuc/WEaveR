@@ -8,6 +8,7 @@
 use tauri::Manager;
 
 use super::{SteamWebview, LABEL};
+use crate::errors::AppError;
 
 impl SteamWebview {
     /// Back up the WebView cookie database before anything wipes it.
@@ -66,7 +67,7 @@ impl SteamWebview {
     /// Pull all `steamcommunity.com` cookies from the webview and load them
     /// into our reqwest jar. WebView2 persists cookies automatically, so no
     /// additional file storage is needed.
-    pub async fn sync_cookies(&self) -> Result<usize, String> {
+    pub async fn sync_cookies(&self) -> Result<usize, AppError> {
         let _g = self.lock.lock().await;
         // Read cookies only if the window already exists.
         if !self.window_exists() {
@@ -75,13 +76,15 @@ impl SteamWebview {
         let Some(w) = self.app.get_webview_window(LABEL) else {
             return Ok(0);
         };
-        let cookies = w.cookies().map_err(|e| e.to_string())?;
+        let cookies = w
+            .cookies()
+            .map_err(|e| AppError::internal(format!("read webview cookies: {e}")))?;
         let steam_com = "https://steamcommunity.com"
             .parse::<url::Url>()
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| AppError::internal(format!("parse steamcommunity url: {e}")))?;
         let steam_pow = "https://store.steampowered.com"
             .parse::<url::Url>()
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| AppError::internal(format!("parse steampowered url: {e}")))?;
         // Build `Cookie` values directly instead of formatting a Set-Cookie
         // header by hand.
         //
@@ -136,7 +139,7 @@ impl SteamWebview {
     /// It does NOT clear the persisted OAuth session in `user_accounts.enc`;
     /// that is the caller's job, because otherwise the next launch would rebuild
     /// the cookies from the saved access token and silently sign back in.
-    pub async fn sign_out(&self) -> Result<usize, String> {
+    pub async fn sign_out(&self) -> Result<usize, AppError> {
         // The window must exist before we can read its cookie list. This has to
         // happen BEFORE taking `self.lock`: `ensure_profile_loaded` takes the
         // same (non-reentrant tokio) mutex, so calling it while holding the
@@ -147,7 +150,7 @@ impl SteamWebview {
 
         let _g = self.lock.lock().await;
         let Some(w) = self.app.get_webview_window(LABEL) else {
-            return Err("NO_WEBVIEW_WINDOW".to_string());
+            return Err(AppError::not_found("NO_WEBVIEW_WINDOW"));
         };
 
         let mut removed = Self::delete_steam_cookies(&w)?;
@@ -160,12 +163,16 @@ impl SteamWebview {
 
     /// Delete every Steam-domain cookie via the precise per-cookie API.
     /// Caller holds `self.lock`.
-    fn delete_steam_cookies(w: &tauri::WebviewWindow) -> Result<usize, String> {
+    fn delete_steam_cookies(w: &tauri::WebviewWindow) -> Result<usize, AppError> {
         let mut removed = 0usize;
-        for cookie in w.cookies().map_err(|e| e.to_string())? {
+        for cookie in w
+            .cookies()
+            .map_err(|e| AppError::internal(format!("read webview cookies: {e}")))?
+        {
             let domain = cookie.domain().unwrap_or_default().to_string();
             if is_steam_domain(&domain) {
-                w.delete_cookie(cookie).map_err(|e| e.to_string())?;
+                w.delete_cookie(cookie)
+                    .map_err(|e| AppError::internal(format!("delete cookie: {e}")))?;
                 removed += 1;
             }
         }
@@ -199,10 +206,10 @@ impl SteamWebview {
     /// only means the request was accepted; on some WebView2 builds an HttpOnly
     /// cookie survives it, which is how the UI once claimed "signed out" while
     /// browsing stayed authenticated. Caller holds `self.lock`.
-    fn purge_surviving_cookies(w: &tauri::WebviewWindow) -> Result<usize, String> {
+    fn purge_surviving_cookies(w: &tauri::WebviewWindow) -> Result<usize, AppError> {
         let still: Vec<String> = w
             .cookies()
-            .map_err(|e| e.to_string())?
+            .map_err(|e| AppError::internal(format!("re-read cookies: {e}")))?
             .into_iter()
             .filter(|c| is_steam_domain(c.domain().unwrap_or_default()))
             .map(|c| c.name().to_string())
@@ -215,7 +222,8 @@ impl SteamWebview {
             still.len(),
             still
         );
-        w.clear_all_browsing_data().map_err(|e| e.to_string())?;
+        w.clear_all_browsing_data()
+            .map_err(|e| AppError::internal(format!("clear browsing data: {e}")))?;
         Ok(still.len())
     }
 }

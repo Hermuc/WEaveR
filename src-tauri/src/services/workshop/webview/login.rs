@@ -7,6 +7,8 @@ use tauri::Manager;
 
 use tokio::time::sleep;
 
+use crate::errors::AppError;
+
 use super::{SteamWebview, LABEL, STEAM_HOME_URL, STEAM_LOGIN_URL};
 
 use super::scripts::{build_login_script, build_page_probe_script};
@@ -23,7 +25,7 @@ impl SteamWebview {
     /// redirects through store/community/help pages, and navigating before that
     /// chain settles leaves the webview on the wrong page (the script then finds
     /// no inputs and the login silently never happens).
-    pub(super) async fn goto_login_form(&self) -> Result<bool, String> {
+    pub(super) async fn goto_login_form(&self) -> Result<bool, AppError> {
         let Some(w) = self.app.get_webview_window(LABEL) else {
             return Ok(false);
         };
@@ -95,7 +97,7 @@ impl SteamWebview {
         username: &str,
         password: &str,
         force: bool,
-    ) -> Result<bool, String> {
+    ) -> Result<bool, AppError> {
         let _g = self.lock.lock().await;
         // Do not create the window to probe the session: a session implies
         // the window already exists, so a missing window means "not logged in".
@@ -133,7 +135,7 @@ impl SteamWebview {
 
         // Navigate to the login page and give the document time to paint.
         w.eval(format!("window.location.href = {:?}", STEAM_LOGIN_URL))
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| AppError::internal(format!("navigate to login: {e}")))?;
         sleep(LOGIN_PAGE_PAINT_WAIT).await;
         let landed = w.url().map(|u| u.to_string()).unwrap_or_default();
         log::info!(
@@ -150,7 +152,8 @@ impl SteamWebview {
         let mut submitted = 0;
         let mut last_verdict = String::from("(none)");
         for _ in 0..6 {
-            w.eval(&script).map_err(|e| e.to_string())?;
+            w.eval(&script)
+                .map_err(|e| AppError::internal(format!("fill login form: {e}")))?;
             submitted += 1;
             sleep(SUBMIT_RETRY_WAIT).await;
             // The script writes its outcome into the URL fragment because
