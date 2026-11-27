@@ -14,6 +14,7 @@ use parking_lot::Mutex;
 use tauri::{AppHandle, Emitter};
 
 use crate::config::SettingsService;
+use crate::errors::AppError;
 use state::{SyncStatus, SyncStatusCache};
 
 pub struct SyncService {
@@ -46,7 +47,7 @@ impl SyncService {
     }
 
     /// Start the engine if it is not already running.
-    pub fn start(&self) -> Result<(), String> {
+    pub fn start(&self) -> Result<(), AppError> {
         let mut guard = self.handle.lock();
         if guard.is_some() {
             return Ok(());
@@ -66,7 +67,7 @@ impl SyncService {
                     let _ = app.emit("sync://event", &dto);
                 }
             })
-            .map_err(|e| format!("spawn sync event thread: {e}"))?;
+            .map_err(|e| AppError::internal(format!("spawn sync event thread: {e}")))?;
         *guard = Some(handle);
         self.start_watcher(&cfg, dirty);
         self.cache.lock().set_running(true);
@@ -103,16 +104,16 @@ impl SyncService {
         status
     }
 
-    pub fn now(&self) -> Result<(), String> {
+    pub fn now(&self) -> Result<(), AppError> {
         self.send(we_sync::engine::Cmd::SyncNow)
     }
 
-    pub fn set_paused(&self, paused: bool) -> Result<(), String> {
+    pub fn set_paused(&self, paused: bool) -> Result<(), AppError> {
         self.cache.lock().set_paused(paused);
         self.send(we_sync::engine::Cmd::SetPaused(paused))
     }
 
-    pub fn set_transfer_paused(&self, paused: bool) -> Result<(), String> {
+    pub fn set_transfer_paused(&self, paused: bool) -> Result<(), AppError> {
         self.send(we_sync::engine::Cmd::SetTransferPaused(paused))
     }
 
@@ -120,10 +121,11 @@ impl SyncService {
         serde_json::to_value(config::load(&self.settings.read())).unwrap_or_default()
     }
 
-    pub fn save_config(&self, value: serde_json::Value) -> Result<(), String> {
-        let parsed: we_sync::config::AppConfig =
-            serde_json::from_value(value).map_err(|e| format!("invalid sync config: {e}"))?;
-        config::save(&self.settings.read(), &parsed).map_err(|e| e.to_string())?;
+    pub fn save_config(&self, value: serde_json::Value) -> Result<(), AppError> {
+        let parsed: we_sync::config::AppConfig = serde_json::from_value(value)
+            .map_err(|e| AppError::validation(format!("invalid sync config: {e}")))?;
+        config::save(&self.settings.read(), &parsed)
+            .map_err(|e| AppError::config(format!("save sync config: {e}")))?;
         let dirty = {
             let guard = self.handle.lock();
             guard.as_ref().map(|handle| handle.dirty.clone())
@@ -146,9 +148,14 @@ impl SyncService {
         }
     }
 
-    fn send(&self, cmd: we_sync::engine::Cmd) -> Result<(), String> {
+    fn send(&self, cmd: we_sync::engine::Cmd) -> Result<(), AppError> {
         let guard = self.handle.lock();
-        let handle = guard.as_ref().ok_or("sync engine is not running")?;
-        handle.tx.send(cmd).map_err(|e| e.to_string())
+        let handle = guard
+            .as_ref()
+            .ok_or_else(|| AppError::not_found("sync engine is not running"))?;
+        handle
+            .tx
+            .send(cmd)
+            .map_err(|e| AppError::internal(e.to_string()))
     }
 }

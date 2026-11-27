@@ -9,7 +9,7 @@ use crate::services::sync::SyncService;
 
 #[tauri::command]
 pub fn sync_start(state: State<'_, Arc<SyncService>>) -> Result<(), String> {
-    state.start()
+    state.start().map_err(String::from)
 }
 
 #[tauri::command]
@@ -25,17 +25,17 @@ pub fn sync_status(state: State<'_, Arc<SyncService>>) -> SyncStatus {
 
 #[tauri::command]
 pub fn sync_now(state: State<'_, Arc<SyncService>>) -> Result<(), String> {
-    state.now()
+    state.now().map_err(String::from)
 }
 
 #[tauri::command]
 pub fn sync_pause(state: State<'_, Arc<SyncService>>, paused: bool) -> Result<(), String> {
-    state.set_paused(paused)
+    state.set_paused(paused).map_err(String::from)
 }
 
 #[tauri::command]
 pub fn sync_transfer_pause(state: State<'_, Arc<SyncService>>, paused: bool) -> Result<(), String> {
-    state.set_transfer_paused(paused)
+    state.set_transfer_paused(paused).map_err(String::from)
 }
 
 #[tauri::command]
@@ -48,5 +48,5 @@ pub fn sync_config_set(
     state: State<'_, Arc<SyncService>>,
     config: serde_json::Value,
 ) -> Result<(), String> {
-    state.save_config(config)
+    state.save_config(config).map_err(String::from)
 }
