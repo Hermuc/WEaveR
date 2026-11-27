@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useTranslation } from "@/i18n/hooks";
 import { useFiltersStore } from "@/stores/filters";
 
@@ -25,8 +25,22 @@ export default function SizeRangeInputs() {
   // filters" button) also empties the visible fields.
   const [minDraft, setMinDraft] = useState(min);
   const [maxDraft, setMaxDraft] = useState(max);
-  useEffect(() => setMinDraft(min), [min]);
-  useEffect(() => setMaxDraft(max), [max]);
+
+  // Sync the drafts when the store changes underneath us (an external reset).
+  // Done during render by comparing with the previous value, which is the
+  // pattern React recommends over an effect: an effect would render once with
+  // stale text, commit it, then render again. It is also what
+  // `react-hooks/set-state-in-effect` forbids.
+  const [syncedMin, setSyncedMin] = useState(min);
+  if (min !== syncedMin) {
+    setSyncedMin(min);
+    setMinDraft(min);
+  }
+  const [syncedMax, setSyncedMax] = useState(max);
+  if (max !== syncedMax) {
+    setSyncedMax(max);
+    setMaxDraft(max);
+  }
 
   const commit = (key: "size_min_mb" | "size_max_mb", value: string) => {
     const next = value.trim();
