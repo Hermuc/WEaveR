@@ -407,7 +407,6 @@ impl WorkshopClient {
         self.browse_url(&url, filters.page.max(1)).await
     }
 
-
     /// Browse with a file-size filter, filling each logical page with matches.
     ///
     /// Steam gives 30 items per physical page and ignores size-related URL
@@ -451,10 +450,7 @@ impl WorkshopClient {
 
         let mut index = {
             let mut cache = self.size_indexes.lock();
-            match cache.pop(&key) {
-                Some(existing) => existing,
-                None => size_index::SizeIndex::default(),
-            }
+            cache.pop(&key).unwrap_or_default()
         };
 
         // Build the physical-page URL once; only `p` changes per page.
@@ -488,10 +484,8 @@ impl WorkshopClient {
                     // fell outside the range is *not* the end and must be
                     // skipped past, or a sparse filter stops after one page.
                     let page_empty = page.items.is_empty();
-                    let ids: Vec<String> =
-                        page.items.iter().map(|i| i.pubfileid.clone()).collect();
-                    let sizes =
-                        file_sizes::fetch_file_sizes(&self.client, &ids).await;
+                    let ids: Vec<String> = page.items.iter().map(|i| i.pubfileid.clone()).collect();
+                    let sizes = file_sizes::fetch_file_sizes(&self.client, &ids).await;
                     // Keep only ids inside the range. Unknown sizes are kept by
                     // `accepts`, which is why they stay in this list.
                     let kept: Vec<String> = ids
@@ -529,7 +523,7 @@ impl WorkshopClient {
 
         Ok(WorkshopPage {
             total_items: discovered as u64,
-            total_pages: ((discovered + per_page - 1) / per_page).max(1) as u32,
+            total_pages: discovered.div_ceil(per_page).max(1) as u32,
             current_page: logical_page,
             items,
             size_filter: Some(WorkshopSizeMeta {
@@ -628,7 +622,6 @@ impl WorkshopClient {
 /// HTTP timeout for a workshop page request.
 const WORKSHOP_REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 
-
 #[cfg(test)]
 mod size_key_tests {
     use crate::services::workshop::url_builder;
@@ -665,7 +658,11 @@ mod size_key_tests {
             age_rating: "Mature".into(),
             ..base()
         };
-        assert_ne!(key(&any), key(&mature), "age rating must affect the scan key");
+        assert_ne!(
+            key(&any),
+            key(&mature),
+            "age rating must affect the scan key"
+        );
     }
 
     #[test]
@@ -683,7 +680,11 @@ mod size_key_tests {
         ] {
             let mut changed = base();
             mutate(&mut changed);
-            assert_ne!(key(&plain), key(&changed), "every filter must affect the key");
+            assert_ne!(
+                key(&plain),
+                key(&changed),
+                "every filter must affect the key"
+            );
         }
     }
 
@@ -702,10 +703,7 @@ mod size_key_tests {
         // Page is pinned to 1 inside the key: pages are scanned sequentially
         // into one index, so they must share a key.
         let first = base();
-        let fifth = WorkshopFilters {
-            page: 5,
-            ..base()
-        };
+        let fifth = WorkshopFilters { page: 5, ..base() };
         assert_eq!(key(&first), key(&fifth));
     }
 }

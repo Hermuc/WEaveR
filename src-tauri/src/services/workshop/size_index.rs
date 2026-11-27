@@ -131,9 +131,8 @@ impl SizeIndex {
         // the filter". Treating the latter as the end stopped the scan after a
         // single sparse page: a 1000 MB floor matches ~0.8 items per page, so
         // page 2 usually yields nothing and the whole search returned empty.
-        Fut: std::future::Future<
-            Output = Result<(Vec<String>, HashMap<String, u64>, bool), String>,
-        >,
+        Fut:
+            std::future::Future<Output = Result<(Vec<String>, HashMap<String, u64>, bool), String>>,
     {
         self.truncated = false;
         let mut walked = 0u32;
@@ -156,7 +155,7 @@ impl SizeIndex {
             }
 
             for id in ids {
-                if sizes.get(&id).is_some() {
+                if sizes.contains_key(&id) {
                     self.matched.push(id);
                 }
             }
@@ -283,10 +282,15 @@ mod tests {
     async fn an_empty_page_marks_the_catalogue_exhausted() {
         let mut index = SizeIndex::default();
         index
-            .fill(100, |_page| async { Ok((Vec::new(), HashMap::new(), true)) })
+            .fill(100, |_page| async {
+                Ok((Vec::new(), HashMap::new(), true))
+            })
             .await
             .unwrap();
-        assert!(!index.truncated(), "running out of catalogue is not truncation");
+        assert!(
+            !index.truncated(),
+            "running out of catalogue is not truncation"
+        );
     }
 
     #[tokio::test]
@@ -340,15 +344,23 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(calls, MAX_PHYSICAL_PAGES, "must keep walking past empty matches");
+        assert_eq!(
+            calls, MAX_PHYSICAL_PAGES,
+            "must keep walking past empty matches"
+        );
         assert_eq!(index.matched_len(), 8, "pages 1 and 4..10 each yield one");
-        assert!(index.truncated(), "still short of 30, so the UI must say so");
+        assert!(
+            index.truncated(),
+            "still short of 30, so the UI must say so"
+        );
     }
 
     #[test]
     fn slicing_a_logical_page_is_one_based() {
-        let mut index = SizeIndex::default();
-        index.matched = (0..75).map(|n| format!("id{n}")).collect();
+        let index = SizeIndex {
+            matched: (0..75).map(|n| format!("id{n}")).collect(),
+            ..Default::default()
+        };
 
         let first = index.page(1, 30);
         assert_eq!(first.ids.len(), 30);
