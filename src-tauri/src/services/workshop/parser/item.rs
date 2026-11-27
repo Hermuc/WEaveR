@@ -1,4 +1,10 @@
 //! Item-details page parser (`filedetails/?id=...`).
+//!
+//! The page is parsed field-family by field-family: each `parse_*` helper
+//! owns one block of markup and returns only the values it is responsible for.
+//! `parse_item_details` assembles them into a `WorkshopItem`. This keeps each
+//! piece independently testable and stops the top-level function from growing
+//! into a 200-line wall (it was one before this split).
 
 use scraper::Html;
 use serde_json::{Map, Value};
@@ -10,32 +16,61 @@ use super::selectors;
 
 pub fn parse_item_details(html: &str, pubfileid: &str) -> WorkshopItem {
     let doc = Html::parse_document(html);
-    let mut item = WorkshopItem {
-        pubfileid: pubfileid.to_string(),
-        ..Default::default()
-    };
+    let (author, author_url) = parse_author(&doc);
+    let (posted_date, updated_date) = parse_dates(&doc);
+    let (rating_star_file, num_ratings) = parse_rating(&doc);
 
-    if let Some(el) = select_first(&doc, ".workshopItemTitle") {
-        item.title = text(el);
+    WorkshopItem {
+        pubfileid: pubfileid.to_string(),
+        title: parse_title(&doc),
+        description: parse_description(&doc),
+        preview_url: parse_preview_url(&doc),
+        author,
+        author_url,
+        file_size: parse_file_size(&doc),
+        posted_date,
+        updated_date,
+        rating_star_file,
+        num_ratings,
+        tags: parse_tags(&doc),
+        collections: parse_parent_collections(&doc),
+        ..Default::default()
     }
-    if item.title.is_empty() {
-        if let Some(el) = select_first(&doc, "title") {
-            let t = text(el);
-            item.title = t.replace("Steam Workshop::", "").trim().to_string();
+}
+
+/// `.workshopItemTitle`, falling back to the `<title>` tag with Steam's prefix
+/// stripped.
+fn parse_title(doc: &Html) -> String {
+    if let Some(el) = select_first(doc, ".workshopItemTitle") {
+        let title = text(el);
+        if !title.is_empty() {
+            return title;
         }
     }
-    if let Some(el) = select_first(&doc, ".workshopItemDescription") {
-        let t = text(el);
-        item.description = if t.len() > 1000 {
-            t.char_indices()
-                .nth(1000)
-                .map(|(idx, _)| &t[..idx])
-                .unwrap_or(&t)
-                .to_string()
-        } else {
-            t
-        };
+    if let Some(el) = select_first(doc, "title") {
+        return text(el).replace("Steam Workshop::", "").trim().to_string();
     }
+    String::new()
+}
+
+/// `.workshopItemDescription`, truncated to 1000 characters (by char, not byte,
+/// so multi-byte text is never cut mid-codepoint).
+fn parse_description(doc: &Html) -> String {
+    let Some(el) = select_first(doc, ".workshopItemDescription") else {
+        return String::new();
+    };
+    let t = text(el);
+    if t.len() <= 1000 {
+        return t;
+    }
+    t.char_indices()
+        .nth(1000)
+        .map(|(idx, _)| t[..idx].to_string())
+        .unwrap_or(t)
+}
+
+/// First non-empty preview image, trying the most specific selector first.
+fn parse_preview_url(doc: &Html) -> String {
     for sel in [
         "#previewImageMain",
         ".workshopItemPreviewImageEnlarge img",
@@ -43,162 +78,172 @@ pub fn parse_item_details(html: &str, pubfileid: &str) -> WorkshopItem {
         ".highlight_screenshot img",
         "meta[property=\"og:image\"]",
     ] {
-        if let Some(el) = select_first(&doc, sel) {
+        if let Some(el) = select_first(doc, sel) {
             let src = el
                 .value()
                 .attr("src")
                 .or_else(|| el.value().attr("content"))
                 .unwrap_or("");
             if !src.is_empty() {
-                item.preview_url = src.to_string();
-                break;
+                return src.to_string();
             }
         }
     }
+    String::new()
+}
 
-    if let Some(el) = select_first(
-        &doc,
+/// `(author name, author profile URL)`. The name is the first non-empty direct
+/// text child of `.friendBlockContent`; the URL comes from the linked form when
+/// Steam renders one.
+fn parse_author(doc: &Html) -> (String, String) {
+    let author_url = select_first(
+        doc,
         ".friendBlockContent a, .workshopItemAuthorName a, .creatorsBlock .friendBlock a",
-    ) {
-        if let Some(href) = el.value().attr("href") {
-            item.author_url = href.to_string();
-        }
-    }
+    )
+    .and_then(|el| el.value().attr("href"))
+    .map(str::to_string)
+    .unwrap_or_default();
 
-    if let Some(el) = select_first(&doc, ".friendBlockContent") {
-        let children: Vec<_> = el
-            .children()
-            .filter_map(|c| c.value().as_text().map(|t| t.trim().to_string()))
-            .filter(|s| !s.is_empty())
-            .collect();
-        if let Some(first) = children.first() {
-            item.author = first.clone();
-        }
-    }
+    let author = select_first(doc, ".friendBlockContent")
+        .and_then(|el| {
+            el.children()
+                .filter_map(|c| c.value().as_text().map(|t| t.trim().to_string()))
+                .find(|s| !s.is_empty())
+        })
+        .unwrap_or_default();
 
-    if let Some(el) = select_first(&doc, ".detailsStatRight") {
-        item.file_size = text(el);
-    }
+    (author, author_url)
+}
 
-    let stat_keys = ["Posted", "Posted:", "Updated", "Updated:"];
-    let labels = &selectors::STAT_LEFT;
-    let values = &selectors::STAT_RIGHT;
-    let lbls: Vec<_> = doc.select(labels).map(text).collect();
-    let vals: Vec<_> = doc.select(values).map(text).collect();
-    for (i, lbl) in lbls.iter().enumerate() {
-        if stat_keys.iter().any(|k| {
-            lbl.trim_end_matches(':')
+/// `.detailsStatRight` — the "File size" value as Steam prints it.
+fn parse_file_size(doc: &Html) -> String {
+    select_first(doc, ".detailsStatRight")
+        .map(text)
+        .unwrap_or_default()
+}
+
+/// `(posted, updated)` from the stat label/value columns.
+fn parse_dates(doc: &Html) -> (String, String) {
+    const STAT_KEYS: [&str; 4] = ["Posted", "Posted:", "Updated", "Updated:"];
+    let labels: Vec<_> = doc.select(&selectors::STAT_LEFT).map(text).collect();
+    let values: Vec<_> = doc.select(&selectors::STAT_RIGHT).map(text).collect();
+
+    let mut posted = String::new();
+    let mut updated = String::new();
+    for (i, label) in labels.iter().enumerate() {
+        let is_wanted = STAT_KEYS.iter().any(|k| {
+            label
+                .trim_end_matches(':')
                 .eq_ignore_ascii_case(k.trim_end_matches(':'))
-        }) {
-            let v = vals.get(i).cloned().unwrap_or_default();
-            if lbl.to_lowercase().contains("post") {
-                item.posted_date = v;
-            } else if lbl.to_lowercase().contains("updat") {
-                item.updated_date = v;
-            }
+        });
+        if !is_wanted {
+            continue;
+        }
+        let value = values.get(i).cloned().unwrap_or_default();
+        let lower = label.to_lowercase();
+        if lower.contains("post") {
+            posted = value;
+        } else if lower.contains("updat") {
+            updated = value;
         }
     }
+    (posted, updated)
+}
 
-    let rating_sel = &selectors::RATING_IMG;
-    if let Some(img) = doc.select(rating_sel).next() {
-        if let Some(src) = img.value().attr("src") {
-            item.rating_star_file = src.to_string();
-        }
-    }
+/// `(rating star image file, rating count)`.
+fn parse_rating(doc: &Html) -> (String, String) {
+    let star = doc
+        .select(&selectors::RATING_IMG)
+        .next()
+        .and_then(|img| img.value().attr("src"))
+        .map(str::to_string)
+        .unwrap_or_default();
 
-    let num_sel = &selectors::NUM_RATINGS;
-    if let Some(el) = doc.select(num_sel).next() {
-        let raw = text(el);
-        let digits: String = raw
-            .chars()
-            .filter(|c| c.is_ascii_digit() || *c == ',')
-            .collect();
-        item.num_ratings = digits;
-    }
+    let count = doc
+        .select(&selectors::NUM_RATINGS)
+        .next()
+        .map(text)
+        .map(|raw| {
+            raw.chars()
+                .filter(|c| c.is_ascii_digit() || *c == ',')
+                .collect::<String>()
+        })
+        .unwrap_or_default();
 
-    // Workshop tags. Steam lists them as `<div class="workshopTags">Category:
-    // <a>Tag1</a>, <a>Tag2</a></div>` — we extract both the category label
-    // (e.g. "Type", "Genre", "Resolution") and the list of values so the UI
-    // can render them grouped like the Python app does.
-    let tag_block_sel = &selectors::TAG_BLOCK;
-    let tag_link_sel = &selectors::ANCHOR;
+    (star, count)
+}
+
+/// Workshop tags as a JSON array of `{tag, category?}` objects.
+///
+/// Steam renders `<div class="workshopTags">Category: <a>Tag1</a>, <a>Tag2</a>
+/// </div>`. The category is the leading text node before the anchors; we skip
+/// punctuation-only nodes so a stray "." or ", " never becomes a bogus header.
+fn parse_tags(doc: &Html) -> Value {
     let mut tags = Vec::new();
-    for block in doc.select(tag_block_sel) {
-        // The category label is the leading text node before the <a> tags.
-        // We pick the first text node that contains *real* content, not
-        // just punctuation or whitespace — Steam sometimes renders a
-        // leading "." or ", " separator that would otherwise become a
-        // bogus category header in the UI.
-        let mut category = String::new();
-        for child in block.children() {
-            if let Some(t) = child.value().as_text() {
-                let raw = t.trim().trim_end_matches(':').trim();
-                if raw.is_empty() {
-                    continue;
-                }
-                // Skip pure-punctuation noise (".", ",", "·", etc.).
-                if raw.chars().all(|c| !c.is_alphanumeric()) {
-                    continue;
-                }
-                category = raw.to_string();
-                break;
-            }
-        }
-        for a in block.select(tag_link_sel) {
-            let value = text(a);
+    for block in doc.select(&selectors::TAG_BLOCK) {
+        let category = block
+            .children()
+            .filter_map(|child| child.value().as_text())
+            .map(|t| t.trim().trim_end_matches(':').trim())
+            .find(|raw| !raw.is_empty() && raw.chars().any(|c| c.is_alphanumeric()))
+            .unwrap_or("")
+            .to_string();
+
+        for anchor in block.select(&selectors::ANCHOR) {
+            let value = text(anchor);
             if value.is_empty() {
                 continue;
             }
-            let mut m = Map::new();
-            m.insert("tag".into(), Value::String(value));
+            let mut map = Map::new();
+            map.insert("tag".into(), Value::String(value));
             if !category.is_empty() {
-                m.insert("category".into(), Value::String(category.clone()));
+                map.insert("category".into(), Value::String(category.clone()));
             }
-            tags.push(Value::Object(m));
+            tags.push(Value::Object(map));
         }
     }
-    item.tags = Value::Array(tags);
+    Value::Array(tags)
+}
 
-    // Parent collections this item appears in. Steam emits:
-    //   <div class="parentCollection" onClick="... id=12345 ...">
-    //     <div class="parentCollectionTitle">Title</div>
-    //     <div class="parentCollectionNumChildren">42 items</div>
-    //   </div>
-    let pc_sel = &selectors::PARENT_COLLECTION;
-    let title_sel = &selectors::PARENT_COLLECTION_TITLE;
-    let count_sel = &selectors::PARENT_COLLECTION_COUNT;
-    let id_re = &selectors::ID_EQ_DIGITS;
-    let num_re = &selectors::DIGITS;
-    for pc in doc.select(pc_sel) {
-        let onclick = pc
+/// Parent collections this item belongs to.
+///
+/// Steam emits `<div class="parentCollection" onClick="... id=12345 ...">` with
+/// a title and a "N items" count inside.
+fn parse_parent_collections(doc: &Html) -> Vec<CollectionRef> {
+    let mut collections = Vec::new();
+    for block in doc.select(&selectors::PARENT_COLLECTION) {
+        let onclick = block
             .value()
             .attr("onClick")
-            .or_else(|| pc.value().attr("onclick"))
+            .or_else(|| block.value().attr("onclick"))
             .unwrap_or("");
-        let Some(cap) = id_re.captures(onclick) else {
+        let Some(captures) = selectors::ID_EQ_DIGITS.captures(onclick) else {
             continue;
         };
-        let id = cap[1].to_string();
-        let title = pc.select(title_sel).next().map(text).unwrap_or_default();
-        let count = pc
-            .select(count_sel)
+        let id = captures[1].to_string();
+
+        let title = block
+            .select(&selectors::PARENT_COLLECTION_TITLE)
             .next()
-            .map(|e| text(e))
-            .and_then(|s| num_re.captures(&s).map(|c| c[1].to_string()))
+            .map(text)
+            .filter(|t| !t.is_empty())
+            .unwrap_or_else(|| "Collection".to_string());
+
+        let item_count = block
+            .select(&selectors::PARENT_COLLECTION_COUNT)
+            .next()
+            .map(text)
+            .and_then(|s| selectors::DIGITS.captures(&s).map(|c| c[1].to_string()))
             .and_then(|s| s.parse::<u32>().ok())
             .unwrap_or(0);
-        item.collections.push(CollectionRef {
+
+        collections.push(CollectionRef {
             id,
-            title: if title.is_empty() {
-                "Collection".to_string()
-            } else {
-                title
-            },
-            item_count: count,
+            title,
+            item_count,
         });
     }
-
-    item
+    collections
 }
 
 #[cfg(test)]
@@ -253,4 +298,3 @@ mod tests {
         assert!(item.preview_url.is_empty());
     }
 }
-

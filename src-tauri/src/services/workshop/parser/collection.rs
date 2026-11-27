@@ -1,4 +1,8 @@
 //! Collection-contents page parser.
+//!
+//! Split by section: header (title/description/preview), author, the `info`
+//! dictionary (ratings, counts, dates, tag groups), the item tiles, and the
+//! related-collections sidebar. `parse_collection_contents` only assembles them.
 
 use scraper::Html;
 use serde_json::Value;
@@ -10,76 +14,101 @@ use super::selectors;
 
 pub fn parse_collection_contents(html: &str, collection_id: &str) -> CollectionContents {
     let doc = Html::parse_document(html);
-    let mut c = CollectionContents {
+
+    let mut contents = CollectionContents {
         collection_id: collection_id.to_string(),
+        title: parse_title(&doc),
+        description: parse_description(&doc),
+        preview_url: parse_preview_url(&doc),
         ..Default::default()
     };
+    let (author, author_url) = parse_author(&doc);
+    contents.author = author;
+    contents.author_url = author_url;
+    contents.info = parse_info(&doc);
 
-    if let Some(el) = select_first(&doc, ".workshopItemTitle") {
-        c.title = text(el);
-    }
-    // The original PyQt build kept the *full* description (and only
-    // truncated it for display when needed). Earlier we used inner_text
-    // which strips whitespace and silently drops <br>-separated lines.
-    // Switch to a newline-preserving extractor so the panel shows the
-    // entire description Steam returns.
-    if let Some(el) = select_first(&doc, ".workshopItemDescription") {
-        c.description = inner_text_multiline(el);
-    }
-    // Background image first (Steam uses it as the hero on collection
-    // pages); fall back to the standard og:image / preview slots.
-    if let Some(bg) = select_first(&doc, ".collectionBackgroundImage") {
+    // Items are collected first and seed `seen`, so the related sidebar never
+    // repeats something already listed above it.
+    let mut seen = std::collections::HashSet::new();
+    contents.items = parse_items(&doc, collection_id, &mut seen);
+    contents.related_collections = parse_related_collections(&doc, collection_id, &mut seen);
+    contents
+}
+
+fn parse_title(doc: &Html) -> String {
+    select_first(doc, ".workshopItemTitle")
+        .map(text)
+        .unwrap_or_default()
+}
+
+/// Full description, keeping newlines.
+///
+/// The original PyQt build kept the *full* description (truncating only for
+/// display); `inner_text` strips whitespace and silently drops `<br>`-separated
+/// lines, so a newline-preserving extractor is used instead.
+fn parse_description(doc: &Html) -> String {
+    select_first(doc, ".workshopItemDescription")
+        .map(|el| inner_text_multiline(el))
+        .unwrap_or_default()
+}
+
+/// Background image first (Steam uses it as the hero on collection pages), then
+/// the standard og:image / preview slots.
+fn parse_preview_url(doc: &Html) -> String {
+    if let Some(bg) = select_first(doc, ".collectionBackgroundImage") {
         if let Some(src) = bg.value().attr("src") {
-            c.preview_url = src.to_string();
+            return src.to_string();
         }
     }
-    if c.preview_url.is_empty() {
-        for sel in [
-            "#previewImageMain",
-            ".workshopItemPreviewImage",
-            ".highlight_screenshot img",
-            "meta[property=\"og:image\"]",
-        ] {
-            if let Some(el) = select_first(&doc, sel) {
-                let val = el
-                    .value()
-                    .attr("src")
-                    .or_else(|| el.value().attr("content"))
-                    .unwrap_or("");
-                if !val.is_empty() {
-                    c.preview_url = val.to_string();
-                    break;
-                }
+    for sel in [
+        "#previewImageMain",
+        ".workshopItemPreviewImage",
+        ".highlight_screenshot img",
+        "meta[property=\"og:image\"]",
+    ] {
+        if let Some(el) = select_first(doc, sel) {
+            let value = el
+                .value()
+                .attr("src")
+                .or_else(|| el.value().attr("content"))
+                .unwrap_or("");
+            if !value.is_empty() {
+                return value.to_string();
             }
         }
     }
+    String::new()
+}
 
-    // Author + author_url. Steam's collection page renders this as
-    //   <div class="friendBlockContent"> Author<br>Author Name </div>
-    //   with a sibling <a class="friendBlockLinkOverlay" href="…">.
-    // Older variants: `.workshopItemAuthorName a`.
-    if let Some(a) = select_first(&doc, ".workshopItemAuthorName a") {
-        c.author = text(a);
-        if let Some(href) = a.value().attr("href") {
-            c.author_url = href.to_string();
-        }
-    } else if let Some(a) = select_first(&doc, ".friendBlockContent a") {
-        c.author = text(a);
-        if let Some(href) = a.value().attr("href") {
-            c.author_url = href.to_string();
+/// `(author, author_url)`.
+///
+/// Steam renders the collection author as
+/// `<div class="friendBlockContent"> Author<br>Name </div>` with a sibling
+/// `<a class="friendBlockLinkOverlay" href="...">`; older variants use
+/// `.workshopItemAuthorName a`.
+fn parse_author(doc: &Html) -> (String, String) {
+    for sel in [".workshopItemAuthorName a", ".friendBlockContent a"] {
+        if let Some(anchor) = select_first(doc, sel) {
+            let url = anchor
+                .value()
+                .attr("href")
+                .map(str::to_string)
+                .unwrap_or_default();
+            return (text(anchor), url);
         }
     }
-    if c.author_url.is_empty() {
-        if let Some(a) = select_first(&doc, ".friendBlockLinkOverlay") {
-            if let Some(href) = a.value().attr("href") {
-                c.author_url = href.to_string();
-            }
-        }
-    }
+    let url = select_first(doc, ".friendBlockLinkOverlay")
+        .and_then(|a| a.value().attr("href"))
+        .map(str::to_string)
+        .unwrap_or_default();
+    (String::new(), url)
+}
 
-    // -------- info dictionary (rating, counts, dates, tag groups) --------
+/// The `info` dictionary: rating, counts, dates and tag groups.
+fn parse_info(doc: &Html) -> Value {
     let mut info = serde_json::Map::new();
-    if let Some(img) = select_first(&doc, ".fileRatingDetails img") {
+
+    if let Some(img) = select_first(doc, ".fileRatingDetails img") {
         if let Some(src) = img.value().attr("src") {
             let path = src.split('?').next().unwrap_or(src);
             let filename = path.rsplit('/').next().unwrap_or("");
@@ -92,69 +121,73 @@ pub fn parse_collection_contents(html: &str, collection_id: &str) -> CollectionC
             }
         }
     }
-    if let Some(el) = select_first(&doc, ".numRatings") {
-        let raw = text(el);
-        let digits: String = raw.chars().filter(|c| c.is_ascii_digit()).collect();
+
+    if let Some(el) = select_first(doc, ".numRatings") {
+        let digits: String = text(el).chars().filter(|c| c.is_ascii_digit()).collect();
         if !digits.is_empty() {
             info.insert("num_ratings".into(), Value::String(digits));
         }
     }
-    if let Some(el) = select_first(&doc, ".rightSectionTopTitle") {
-        let raw = text(el);
-        if let Some(m) = selectors::DIGITS.captures(&raw) {
-            if let Ok(n) = m[1].parse::<u64>() {
+
+    if let Some(el) = select_first(doc, ".rightSectionTopTitle") {
+        if let Some(captures) = selectors::DIGITS.captures(&text(el)) {
+            if let Ok(count) = captures[1].parse::<u64>() {
                 info.insert(
                     "item_count".into(),
-                    Value::Number(serde_json::Number::from(n)),
+                    Value::Number(serde_json::Number::from(count)),
                 );
             }
         }
     }
-    let stat_left_sel = &selectors::STAT_LEFT;
-    let stat_right_sel = &selectors::STAT_RIGHT;
-    let lefts: Vec<_> = doc.select(stat_left_sel).collect();
-    let rights: Vec<_> = doc.select(stat_right_sel).collect();
-    for (l, r) in lefts.iter().zip(rights.iter()) {
-        let left = text(*l);
-        let right = text(*r);
-        let lr = right.to_lowercase();
-        let ll = left.to_lowercase();
-        if lr.contains("unique") {
+
+    insert_stat_rows(doc, &mut info);
+    insert_tag_groups(doc, &mut info);
+    Value::Object(info)
+}
+
+/// Map the stat label/value rows onto info keys.
+fn insert_stat_rows(doc: &Html, info: &mut serde_json::Map<String, Value>) {
+    let lefts: Vec<_> = doc.select(&selectors::STAT_LEFT).collect();
+    let rights: Vec<_> = doc.select(&selectors::STAT_RIGHT).collect();
+    for (left_el, right_el) in lefts.iter().zip(rights.iter()) {
+        let left = text(*left_el);
+        let right = text(*right_el);
+        let right_lower = right.to_lowercase();
+        let left_lower = left.to_lowercase();
+        if right_lower.contains("unique") {
             info.insert("unique_visitors".into(), Value::String(left));
-        } else if lr.contains("total") && lr.contains("favorit") {
+        } else if right_lower.contains("total") && right_lower.contains("favorit") {
             info.insert("total_favorited".into(), Value::String(left));
-        } else if lr.contains("favorit") {
+        } else if right_lower.contains("favorit") {
             info.insert("favorited".into(), Value::String(left));
-        } else if lr.contains("subscriber") {
+        } else if right_lower.contains("subscriber") {
             info.insert("subscribers".into(), Value::String(left));
-        } else if ll.contains("posted")
-            || ll.contains("added")
-            || ll.contains("created")
+        } else if left_lower.contains("posted")
+            || left_lower.contains("added")
+            || left_lower.contains("created")
         {
             info.insert("posted_date".into(), Value::String(right));
-        } else if ll.contains("updated") || ll.contains("changed")
-        {
+        } else if left_lower.contains("updated") || left_lower.contains("changed") {
             info.insert("updated_date".into(), Value::String(right));
         }
     }
-    // Tag groups (.workshopTags > .workshopTagsTitle + <a> links).
-    let tag_block_sel = &selectors::TAG_BLOCK;
-    let tag_title_sel = &selectors::TAG_TITLE;
-    let tag_link_sel = &selectors::ANCHOR;
-    for td in doc.select(tag_block_sel) {
-        let Some(title_el) = td.select(tag_title_sel).next() else {
+}
+
+/// Collapse each `.workshopTags` block into `"Category": "Tag1, Tag2"`.
+fn insert_tag_groups(doc: &Html, info: &mut serde_json::Map<String, Value>) {
+    for block in doc.select(&selectors::TAG_BLOCK) {
+        let Some(title_el) = block.select(&selectors::TAG_TITLE).next() else {
             continue;
         };
-        let mut key = text(title_el);
-        key = key
+        let key = text(title_el)
             .trim_end_matches(|c: char| c == ':' || c.is_whitespace() || c == '\u{00a0}')
             .trim()
             .to_string();
         if key.is_empty() {
             continue;
         }
-        let values: Vec<String> = td
-            .select(tag_link_sel)
+        let values: Vec<String> = block
+            .select(&selectors::ANCHOR)
             .map(text)
             .filter(|v| !v.is_empty())
             .collect();
@@ -162,19 +195,17 @@ pub fn parse_collection_contents(html: &str, collection_id: &str) -> CollectionC
             info.insert(key, Value::String(values.join(", ")));
         }
     }
-    c.info = Value::Object(info);
+}
 
-    // -------- items in this collection (with their own author chips) ----
-    let item_sel = &selectors::COLLECTION_ITEM;
-    let link_sel = &selectors::BROWSE_LINK;
-    let preview_sel = &selectors::COLLECTION_PREVIEW;
-    let img_sel = &selectors::IMG;
-    let title_sel = &selectors::WORKSHOP_TITLE;
-    let author_sel = &selectors::WORKSHOP_AUTHOR_ANCHOR;
-
-    let mut seen = std::collections::HashSet::new();
-    for e in doc.select(item_sel) {
-        let Some(link) = e.select(link_sel).next() else {
+/// Item tiles, skipping the collection itself and anything already seen.
+fn parse_items(
+    doc: &Html,
+    collection_id: &str,
+    seen: &mut std::collections::HashSet<String>,
+) -> Vec<WorkshopItem> {
+    let mut items = Vec::new();
+    for tile in doc.select(&selectors::COLLECTION_ITEM) {
+        let Some(link) = tile.select(&selectors::BROWSE_LINK).next() else {
             continue;
         };
         let Some(id) = extract_pubfileid(link.value().attr("href").unwrap_or("")) else {
@@ -183,27 +214,37 @@ pub fn parse_collection_contents(html: &str, collection_id: &str) -> CollectionC
         if id == collection_id || !seen.insert(id.clone()) {
             continue;
         }
-        let title = e.select(title_sel).next().map(text).unwrap_or_default();
-        let preview = e
-            .select(preview_sel)
+
+        let title = tile
+            .select(&selectors::WORKSHOP_TITLE)
+            .next()
+            .map(text)
+            .unwrap_or_default();
+        let preview = tile
+            .select(&selectors::COLLECTION_PREVIEW)
             .next()
             .and_then(|i| i.value().attr("src"))
             .or_else(|| {
-                e.select(img_sel)
+                tile.select(&selectors::IMG)
                     .next()
                     .and_then(|i| i.value().attr("src"))
             })
             .unwrap_or("")
             .to_string();
-        let mut author = String::new();
-        let mut author_url = String::new();
-        if let Some(a) = e.select(author_sel).next() {
-            author = text(a);
-            if let Some(href) = a.value().attr("href") {
-                author_url = href.to_string();
+
+        let (author, author_url) = match tile.select(&selectors::WORKSHOP_AUTHOR_ANCHOR).next() {
+            Some(anchor) => {
+                let url = anchor
+                    .value()
+                    .attr("href")
+                    .map(str::to_string)
+                    .unwrap_or_default();
+                (text(anchor), url)
             }
-        }
-        c.items.push(WorkshopItem {
+            None => (String::new(), String::new()),
+        };
+
+        items.push(WorkshopItem {
             pubfileid: id,
             title,
             preview_url: preview,
@@ -212,13 +253,18 @@ pub fn parse_collection_contents(html: &str, collection_id: &str) -> CollectionC
             ..Default::default()
         });
     }
+    items
+}
 
-    // -------- related collections sidebar ------------------------------
-    let related_sel = &selectors::COLLECTION_RELATED;
-    let count_sel = &selectors::COLLECTION_COUNT;
-    let digits_re = &selectors::DIGITS;
-    for r in doc.select(related_sel) {
-        let Some(link) = r.select(link_sel).next() else {
+/// Related-collections sidebar, skipping the collection itself and duplicates.
+fn parse_related_collections(
+    doc: &Html,
+    collection_id: &str,
+    seen: &mut std::collections::HashSet<String>,
+) -> Vec<WorkshopItem> {
+    let mut related = Vec::new();
+    for entry in doc.select(&selectors::COLLECTION_RELATED) {
+        let Some(link) = entry.select(&selectors::BROWSE_LINK).next() else {
             continue;
         };
         let Some(id) = extract_pubfileid(link.value().attr("href").unwrap_or("")) else {
@@ -227,22 +273,28 @@ pub fn parse_collection_contents(html: &str, collection_id: &str) -> CollectionC
         if id == collection_id || !seen.insert(id.clone()) {
             continue;
         }
-        let title = r.select(title_sel).next().map(text).unwrap_or_default();
-        let preview = r
-            .select(preview_sel)
+
+        let title = entry
+            .select(&selectors::WORKSHOP_TITLE)
+            .next()
+            .map(text)
+            .unwrap_or_default();
+        let preview = entry
+            .select(&selectors::COLLECTION_PREVIEW)
             .next()
             .and_then(|i| i.value().attr("src"))
             .unwrap_or("")
             .to_string();
+
         let mut item_count: u32 = 0;
-        if let Some(ce) = r.select(count_sel).next() {
-            let raw = text(ce);
-            if let Some(m) = digits_re.captures(&raw) {
-                if let Ok(n) = m[1].parse::<u32>() {
-                    item_count = n;
+        if let Some(el) = entry.select(&selectors::COLLECTION_COUNT).next() {
+            if let Some(captures) = selectors::DIGITS.captures(&text(el)) {
+                if let Ok(count) = captures[1].parse::<u32>() {
+                    item_count = count;
                 }
             }
         }
+
         let collections = if item_count > 0 {
             vec![CollectionRef {
                 id: id.clone(),
@@ -252,7 +304,8 @@ pub fn parse_collection_contents(html: &str, collection_id: &str) -> CollectionC
         } else {
             Vec::new()
         };
-        c.related_collections.push(WorkshopItem {
+
+        related.push(WorkshopItem {
             pubfileid: id,
             title,
             preview_url: preview,
@@ -261,8 +314,7 @@ pub fn parse_collection_contents(html: &str, collection_id: &str) -> CollectionC
             ..Default::default()
         });
     }
-
-    c
+    related
 }
 
 #[cfg(test)]
@@ -309,4 +361,3 @@ mod tests {
         assert!(c.items.is_empty());
     }
 }
-
