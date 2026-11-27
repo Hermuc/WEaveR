@@ -22,6 +22,8 @@ use std::time::Duration;
 
 use prost::Message;
 
+use crate::errors::AppError;
+
 const REFRESH_TIMEOUT: Duration = Duration::from_secs(20);
 const GENERATE_URL: &str =
     "https://api.steampowered.com/IAuthenticationService/GenerateAccessTokenForApp/v1/";
@@ -40,7 +42,7 @@ pub async fn refresh_access_token(
     steam_id: &str,
     refresh_token: &str,
     allow_renewal: bool,
-) -> Result<TokenPair, String> {
+) -> Result<TokenPair, AppError> {
     let cm_error = match refresh_via_cm(account_name, steam_id, refresh_token, allow_renewal).await
     {
         Ok(pair) => return Ok(pair),
@@ -50,7 +52,9 @@ pub async fn refresh_access_token(
 
     match refresh_via_http(steam_id, refresh_token, allow_renewal).await {
         Ok(pair) => Ok(pair),
-        Err(http_error) => Err(format!("cm: {cm_error}; http: {http_error}")),
+        Err(http_error) => Err(AppError::network(format!(
+            "cm: {cm_error}; http: {http_error}"
+        ))),
     }
 }
 
@@ -136,17 +140,17 @@ async fn refresh_via_cm(
     steam_id: &str,
     refresh_token: &str,
     allow_renewal: bool,
-) -> Result<TokenPair, String> {
+) -> Result<TokenPair, AppError> {
     let steam_id_u64: u64 = steam_id
         .parse()
-        .map_err(|_| format!("invalid steam id: {steam_id}"))?;
+        .map_err(|_| AppError::validation(format!("invalid steam id: {steam_id}")))?;
 
     let client = steamroom_client::login::LoginBuilder::new()
         .device_name("WEaveR")
         .with_refresh_token(account_name, refresh_token)
         .login()
         .await
-        .map_err(|e| format!("cm login: {e}"))?;
+        .map_err(|e| AppError::network(format!("cm login: {e}")))?;
 
     let request = steamroom::generated::CAuthenticationAccessTokenGenerateForAppRequest {
         refresh_token: Some(refresh_token.to_string()),
@@ -159,14 +163,14 @@ async fn refresh_via_cm(
             &request.encode_to_vec(),
         )
         .await
-        .map_err(|e| format!("cm call: {e}"))?;
+        .map_err(|e| AppError::network(format!("cm call: {e}")))?;
     let parsed = steamroom::generated::CAuthenticationAccessTokenGenerateForAppResponse::decode(
         &response.body[..],
     )
-    .map_err(|e| format!("cm decode: {e}"))?;
+    .map_err(|e| AppError::network(format!("cm decode: {e}")))?;
     let access_token = parsed.access_token.unwrap_or_default();
     if access_token.is_empty() {
-        return Err("cm call returned an empty access token".to_string());
+        return Err(AppError::network("cm call returned an empty access token"));
     }
     Ok(TokenPair {
         access_token,
@@ -179,11 +183,11 @@ async fn refresh_via_http(
     steam_id: &str,
     refresh_token: &str,
     allow_renewal: bool,
-) -> Result<TokenPair, String> {
+) -> Result<TokenPair, AppError> {
     let client = reqwest::Client::builder()
         .timeout(REFRESH_TIMEOUT)
         .build()
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| AppError::network(e.to_string()))?;
     let mut form: Vec<(&str, &str)> = vec![("refresh_token", refresh_token), ("steamid", steam_id)];
     if allow_renewal {
         form.push(("renewal_type", "1"));
@@ -193,7 +197,7 @@ async fn refresh_via_http(
         .form(&form)
         .send()
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| AppError::network(e.to_string()))?;
     let status = response.status();
     let eresult = response
         .headers()
@@ -204,16 +208,16 @@ async fn refresh_via_http(
     let body: serde_json::Value = response
         .json()
         .await
-        .map_err(|e| format!("parse response: {e}"))?;
+        .map_err(|e| AppError::network(format!("parse response: {e}")))?;
     let access_token = body
         .pointer("/response/access_token")
         .and_then(|v| v.as_str())
         .unwrap_or_default()
         .to_string();
     if access_token.is_empty() {
-        return Err(format!(
+        return Err(AppError::network(format!(
             "empty access token (status={status}, x-eresult={eresult})"
-        ));
+        )));
     }
     Ok(TokenPair {
         access_token,

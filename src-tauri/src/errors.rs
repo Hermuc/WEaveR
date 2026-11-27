@@ -147,6 +147,21 @@ impl AppError {
     pub fn internal(message: impl Into<String>) -> Self {
         Self::new(ErrorCode::Internal, message)
     }
+
+    /// Wrap a legacy `String` error that crossed a not-yet-migrated boundary.
+    ///
+    /// Used as `.map_err(AppError::from_legacy)` while a callee still returns
+    /// `Result<T, String>`. The message is preserved verbatim, so a caller that
+    /// converts back to `String` at the command boundary is lossless. Once the
+    /// callee is migrated too, this call disappears.
+    pub fn from_legacy(message: impl Into<String>) -> Self {
+        Self::new(ErrorCode::Internal, message)
+    }
+
+    /// A validation failure, the most common shape of a legacy message.
+    pub fn from_legacy_validation(message: impl Into<String>) -> Self {
+        Self::new(ErrorCode::Validation, message)
+    }
 }
 
 /// Display text for the log and for the legacy `String` path.

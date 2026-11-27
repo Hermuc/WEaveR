@@ -20,6 +20,7 @@ use std::sync::Arc;
 use serde::Serialize;
 
 use crate::accounts::{AccountManager, StoredSteamSession};
+use crate::errors::AppError;
 use token::TokenKind;
 
 /// Three-state session verdict. `Unknown` exists because a failed network call
@@ -77,7 +78,7 @@ impl SteamSessionService {
         &self,
         account: &str,
         tokens: &steamroom::auth::AuthTokens,
-    ) -> Result<StoredSteamSession, String> {
+    ) -> Result<StoredSteamSession, AppError> {
         self.save_tokens(account, &tokens.access_token, &tokens.refresh_token)
     }
 
@@ -88,18 +89,20 @@ impl SteamSessionService {
         account: &str,
         access_token: &str,
         refresh_token: &str,
-    ) -> Result<StoredSteamSession, String> {
+    ) -> Result<StoredSteamSession, AppError> {
         let steam_id = token::parse_claims(access_token)
             .and_then(|c| c.sub)
             .or_else(|| token::parse_claims(refresh_token).and_then(|c| c.sub))
-            .ok_or_else(|| "Steam token has no SteamID claim".to_string())?;
+            .ok_or_else(|| AppError::validation("Steam token has no SteamID claim"))?;
         let session = StoredSteamSession {
             steam_id,
             access_token: access_token.to_string(),
             refresh_token: refresh_token.to_string(),
             saved_at: token::unix_now() as u64,
         };
-        self.accounts.set_session(account, session.clone())?;
+        self.accounts
+            .set_session(account, session.clone())
+            .map_err(AppError::from_legacy)?;
         log::info!(
             "[steam-session] saved login for {account} access_aud={} refresh_aud={}",
             token::describe_aud(&session.access_token),
@@ -113,7 +116,7 @@ impl SteamSessionService {
     /// `Ok(None)` means "no session material at all" — the caller should ask
     /// the user to sign in. A network failure during refresh is also reported as
     /// `Ok(None)` but logged; verification later turns it into `Unknown`.
-    pub async fn ensure_access_token(&self, account: &str) -> Result<Option<String>, String> {
+    pub async fn ensure_access_token(&self, account: &str) -> Result<Option<String>, AppError> {
         self.ensure_access_token_inner(account, false).await
     }
 
@@ -123,7 +126,7 @@ impl SteamSessionService {
     /// in the future (password change, "sign out everywhere", …). The only way
     /// to notice is a failed verification, so the restore path calls this once
     /// before giving up.
-    pub async fn force_refresh(&self, account: &str) -> Result<Option<String>, String> {
+    pub async fn force_refresh(&self, account: &str) -> Result<Option<String>, AppError> {
         self.ensure_access_token_inner(account, true).await
     }
 
@@ -131,7 +134,7 @@ impl SteamSessionService {
         &self,
         account: &str,
         force: bool,
-    ) -> Result<Option<String>, String> {
+    ) -> Result<Option<String>, AppError> {
         let _guard = self.refresh_lock.lock().await;
 
         let Some(mut session) = self.accounts.session_for(account) else {
@@ -189,7 +192,9 @@ impl SteamSessionService {
                     session.refresh_token = new_refresh;
                 }
                 session.saved_at = token::unix_now() as u64;
-                self.accounts.set_session(account, session)?;
+                self.accounts
+                    .set_session(account, session)
+                    .map_err(AppError::from_legacy)?;
                 log::info!(
                     "[steam-session] refreshed access token for {account} (aud={})",
                     token::describe_aud(&pair.access_token)
@@ -202,7 +207,7 @@ impl SteamSessionService {
                 *self.last_refresh_failure.lock().unwrap() = Some(RefreshFailure {
                     account: account.to_string(),
                     at: std::time::Instant::now(),
-                    message: e.clone(),
+                    message: e.to_string(),
                 });
                 Ok(None)
             }
@@ -211,7 +216,7 @@ impl SteamSessionService {
 
     /// Last-resort path: use the Steam client's cached refresh token when no
     /// session has ever been stored for this account.
-    async fn try_local_token(&self, account: &str) -> Result<Option<String>, String> {
+    async fn try_local_token(&self, account: &str) -> Result<Option<String>, AppError> {
         let Some(local) = local_source::extract_refresh_token(account) else {
             return Ok(None);
         };
@@ -230,7 +235,9 @@ impl SteamSessionService {
             refresh_token: local,
             saved_at: token::unix_now() as u64,
         };
-        self.accounts.set_session(account, session)?;
+        self.accounts
+            .set_session(account, session)
+            .map_err(AppError::from_legacy)?;
         Ok(Some(pair.access_token))
     }
 
@@ -291,7 +298,7 @@ async fn refresh_with_timeout(
     account: &str,
     steam_id: &str,
     refresh_token: &str,
-) -> Result<Option<refresh::TokenPair>, String> {
+) -> Result<Option<refresh::TokenPair>, AppError> {
     match tokio::time::timeout(
         std::time::Duration::from_secs(60),
         refresh::refresh_access_token(account, steam_id, refresh_token, false),
@@ -299,8 +306,8 @@ async fn refresh_with_timeout(
     .await
     {
         Ok(Ok(pair)) => Ok(Some(pair)),
-        Ok(Err(e)) => Err(e),
-        Err(_) => Err("refresh timed out after 60s".to_string()),
+        Ok(Err(e)) => Err(AppError::network(e)),
+        Err(_) => Err(AppError::network("refresh timed out after 60s")),
     }
 }
 
