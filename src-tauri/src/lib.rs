@@ -5,6 +5,7 @@
 pub mod commands;
 pub mod config;
 pub mod core;
+pub mod errors;
 pub mod plugins;
 pub mod services;
 
@@ -12,6 +13,7 @@ pub use core::app_state;
 pub use core::constants;
 pub use core::logger;
 pub use core::runtime;
+pub use errors::{AppError, AuthReason, ErrorCode};
 
 // `plugins` is deliberately not re-exported at the crate root: callers use the
 // full `crate::plugins::…` path, which keeps the layer visible at the call site.
