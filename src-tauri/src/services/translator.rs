@@ -118,3 +118,75 @@ fn map_language(code: &str) -> &str {
 // ── Timing constants ──────────────────────────────────────────
 /// HTTP timeout for a translation request.
 const TRANSLATE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn auto_and_empty_both_mean_autodetect() {
+        assert_eq!(map_language("auto"), "auto");
+        assert_eq!(map_language(""), "auto");
+    }
+
+    #[test]
+    fn plain_codes_pass_through() {
+        for code in ["en", "ru", "de", "es", "fr", "pt", "it", "pl", "ja", "ko"] {
+            assert_eq!(map_language(code), code);
+        }
+    }
+
+    #[test]
+    fn chinese_variants_normalise_to_the_google_codes() {
+        assert_eq!(map_language("zh"), "zh-CN");
+        assert_eq!(map_language("zh-CN"), "zh-CN");
+        assert_eq!(map_language("zh-Hans"), "zh-CN");
+        assert_eq!(map_language("zh-TW"), "zh-TW");
+        assert_eq!(map_language("zh-Hant"), "zh-TW");
+    }
+
+    #[test]
+    fn an_unknown_hyphenated_locale_is_passed_through() {
+        // A regional variant Google may understand; better than forcing en.
+        assert_eq!(map_language("pt-BR"), "pt-BR");
+        assert_eq!(map_language("sr-Latn"), "sr-Latn");
+    }
+
+    #[test]
+    fn an_unknown_bare_code_falls_back_to_autodetect() {
+        // The old behaviour forced "en", which mistranslated every
+        // non-English description whose locale we did not list.
+        assert_eq!(map_language("xx"), "auto");
+        assert_eq!(map_language("klingon"), "auto");
+    }
+
+    #[test]
+    fn the_cache_key_separates_all_three_parts() {
+        assert_eq!(
+            TranslatorCache::key("zh-CN", "en", "hello"),
+            "zh-CN::en::hello"
+        );
+        // Distinct inputs must not collide.
+        assert_ne!(
+            TranslatorCache::key("zh-CN", "en", "a::b"),
+            TranslatorCache::key("zh-CN", "a", "b")
+        );
+    }
+
+    #[test]
+    fn the_cache_round_trips_a_value() {
+        let cache = TranslatorCache::new();
+        assert_eq!(cache.get("zh-CN", "en", "hello"), None);
+        cache.put("zh-CN", "en", "hello", "你好".to_string());
+        assert_eq!(cache.get("zh-CN", "en", "hello").as_deref(), Some("你好"));
+    }
+
+    #[test]
+    fn the_cache_is_keyed_by_all_three_parts() {
+        let cache = TranslatorCache::new();
+        cache.put("zh-CN", "en", "hello", "你好".to_string());
+        assert_eq!(cache.get("zh-TW", "en", "hello"), None);
+        assert_eq!(cache.get("zh-CN", "de", "hello"), None);
+        assert_eq!(cache.get("zh-CN", "en", "bye"), None);
+    }
+}

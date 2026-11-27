@@ -119,3 +119,57 @@ fn version_is_newer(remote: &str, local: &str) -> bool {
 // ── Timing constants ──────────────────────────────────────────
 /// HTTP timeout for the update check.
 const UPDATE_CHECK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_higher_patch_is_newer() {
+        assert!(version_is_newer("1.0.1", "1.0.0"));
+    }
+
+    #[test]
+    fn an_equal_version_is_not_newer() {
+        assert!(!version_is_newer("4.13.0", "4.13.0"));
+    }
+
+    #[test]
+    fn an_older_version_is_not_newer() {
+        assert!(!version_is_newer("1.0.0", "1.0.1"));
+    }
+
+    #[test]
+    fn components_compare_numerically_not_lexically() {
+        // 9 < 10 as numbers, though "9" > "10" as strings.
+        assert!(version_is_newer("1.10.0", "1.9.0"));
+        assert!(!version_is_newer("1.9.0", "1.10.0"));
+    }
+
+    #[test]
+    fn a_longer_version_wins_when_the_prefix_matches() {
+        assert!(version_is_newer("1.2.3.4", "1.2.3"));
+        assert!(!version_is_newer("1.2.3", "1.2.3.4"));
+    }
+
+    #[test]
+    fn trailing_non_numeric_suffixes_are_ignored() {
+        // GitHub tags look like "v4.13.0" and betas like "4.14.0-beta".
+        assert!(version_is_newer("4.14.0-beta", "4.13.0"));
+        assert!(!version_is_newer("4.13.0-beta", "4.13.0"));
+    }
+
+    #[test]
+    fn an_unparsable_remote_is_not_newer() {
+        // No digits at all: the parse yields an empty vector, so nothing
+        // compares as greater.
+        assert!(!version_is_newer("", "4.13.0"));
+        assert!(!version_is_newer("nightly", "4.13.0"));
+    }
+
+    #[test]
+    fn a_missing_local_component_counts_as_zero() {
+        assert!(version_is_newer("1.0.1", "1.0"));
+        assert!(!version_is_newer("1.0", "1.0.0"));
+    }
+}
