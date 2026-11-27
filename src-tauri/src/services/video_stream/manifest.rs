@@ -97,4 +97,3 @@ mod tests {
         assert_eq!(decompress_manifest(b"").unwrap(), Vec::<u8>::new());
     }
 }
-

@@ -232,7 +232,8 @@ async fn resolve_with_retry(
             log::warn!("[video-stream] resolve on cached session failed ({e}); fresh login");
             video_stream::forget_session();
             let fresh =
-                video_stream::login(&creds.username, &creds.password, session_refresh_token).await?;
+                video_stream::login(&creds.username, &creds.password, session_refresh_token)
+                    .await?;
             video_stream::resolve_video(&fresh, item_id).await
         }
     }

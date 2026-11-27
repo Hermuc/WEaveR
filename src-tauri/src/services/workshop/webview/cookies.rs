@@ -10,7 +10,6 @@ use tauri::Manager;
 use super::{SteamWebview, LABEL};
 
 impl SteamWebview {
-
     /// Back up the WebView cookie database before anything wipes it.
     ///
     /// `clear_all_browsing_data()` is destructive and irreversible: it deletes

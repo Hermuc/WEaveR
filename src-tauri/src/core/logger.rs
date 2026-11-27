@@ -155,7 +155,6 @@ impl log::Log for WEaveLogger {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

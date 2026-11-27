@@ -12,8 +12,9 @@ use reqwest::cookie::Jar;
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 use tokio::sync::Mutex;
 
-use super::{install_cookies_for_window, SteamWebview, LABEL, STEAM_LOGIN_URL, WINDOW_CREATE_TIMEOUT};
-
+use super::{
+    install_cookies_for_window, SteamWebview, LABEL, STEAM_LOGIN_URL, WINDOW_CREATE_TIMEOUT,
+};
 
 impl SteamWebview {
     pub fn new(app: AppHandle, data_dir: PathBuf, jar: Arc<Jar>) -> Self {
@@ -175,7 +176,6 @@ impl SteamWebview {
         self.wait_for_login(true, 8, 50).await
     }
 
-
     /// Install a saved Steam session into the webview's cookie store.
     ///
     /// This is the payoff of persisting `{steamid, access_token}`:
@@ -194,7 +194,8 @@ impl SteamWebview {
         let Some(w) = self.app.get_webview_window(LABEL) else {
             return Err("webview window not ready".into());
         };
-        let secure = crate::accounts::StoredSteamSession::steam_login_secure(steam_id, access_token);
+        let secure =
+            crate::accounts::StoredSteamSession::steam_login_secure(steam_id, access_token);
         // A random session id is fine: Steam only uses it as a CSRF token, it
         // is not tied to the account.
         let session_id: String = {

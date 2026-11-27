@@ -88,7 +88,6 @@ impl EndpointPool {
         order.truncate(MAX_ATTEMPTS);
         order
     }
-
 }
 
 #[cfg(test)]
@@ -109,7 +108,10 @@ mod tests {
         let mut pool = EndpointPool::new(3);
         pool.mark_failure(0);
         let candidates = pool.candidates(Instant::now());
-        assert!(!candidates.contains(&0), "cooling host must not be tried first");
+        assert!(
+            !candidates.contains(&0),
+            "cooling host must not be tried first"
+        );
         assert_eq!(candidates.len(), MAX_ATTEMPTS);
     }
 

@@ -16,8 +16,8 @@
 mod auth;
 pub(crate) mod disk_cache;
 mod endpoint_pool;
-mod layout_cache;
 mod fetch;
+mod layout_cache;
 mod manifest;
 mod resolved;
 
@@ -26,9 +26,7 @@ use fetch::{build_endpoints, build_resolved_video, fetch_cdn_tokens, fetch_manif
 use manifest::{decompress_manifest, is_video};
 
 pub use auth::{forget_session, login, shared_login};
-pub use disk_cache::{
-    clear as clear_cache, stats as cache_stats, CacheStats as VideoCacheStats,
-};
+pub use disk_cache::{clear as clear_cache, stats as cache_stats, CacheStats as VideoCacheStats};
 pub use layout_cache::has_cached_layout;
 use layout_cache::{cached_layout, store_layout};
 
@@ -127,7 +125,6 @@ pub struct ResolvedVideo {
     /// onto one network request instead of each fetching the same bytes.
     inflight: Arc<parking_lot::Mutex<std::collections::HashSet<usize>>>,
 }
-
 
 /// Resolve a workshop item to a [`ResolvedVideo`] streamable over HTTP range.
 pub async fn resolve_video(
@@ -246,7 +243,14 @@ pub async fn resolve_video(
         .await?
         .unwrap_or(0);
 
-    let manifest_data = fetch_manifest(depot_id, manifest_id, request_code, &endpoints, &cdn_servers).await?;
+    let manifest_data = fetch_manifest(
+        depot_id,
+        manifest_id,
+        request_code,
+        &endpoints,
+        &cdn_servers,
+    )
+    .await?;
     log::info!("[timing] manifest_download total {:?}", _t0.elapsed());
     let manifest_bytes = decompress_manifest(&manifest_data)?;
     let mut manifest = DepotManifest::parse(&manifest_bytes)
@@ -320,7 +324,9 @@ pub async fn resolve_video(
     }
     store_layout(item_id, &info);
 
-    Ok(build_resolved_video(info, depot_key, depot_id, endpoints, http))
+    Ok(build_resolved_video(
+        info, depot_key, depot_id, endpoints, http,
+    ))
 }
 // ── Timing constants ──────────────────────────────────────────
 /// A manifest body can take tens of seconds on slow links.

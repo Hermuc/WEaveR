@@ -176,7 +176,8 @@ mod tests {
     #[test]
     fn store_and_load_round_trip() {
         // Isolated directory so a developer's real cache is never touched.
-        let dir = std::env::temp_dir().join(format!("weave-disk-cache-test-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("weave-disk-cache-test-{}", std::process::id()));
         std::env::set_var("WEAVE_VIDEO_CACHE_DIR", &dir);
         let bytes = b"chunk-bytes";
         store(7, 8, "0011", bytes).expect("store");

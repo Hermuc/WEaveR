@@ -14,7 +14,6 @@ const COOKIE_APPLY_WAIT: std::time::Duration = std::time::Duration::from_millis(
 /// Let an injected eval run before reading its URL-fragment result.
 const EVAL_SETTLE: std::time::Duration = std::time::Duration::from_millis(300);
 
-
 /// Just opens the parser webview window without starting any login-polling loop.
 /// Safe to call when already logged in — will not fire "steam-login-success".
 #[tauri::command]
@@ -271,11 +270,7 @@ pub async fn steam_qr_login_finalize(
     //
     // Both domains matter: the community site serves the pages we scrape, while
     // the store domain is what the login flow itself uses.
-    crate::workshop::webview::install_cookies_for_window(
-        &w,
-        &steam_login_secure,
-        &sessionid,
-    )?;
+    crate::workshop::webview::install_cookies_for_window(&w, &steam_login_secure, &sessionid)?;
 
     w.eval("window.location.href = 'https://steamcommunity.com/'")
         .map_err(|e| e.to_string())?;
@@ -449,14 +444,26 @@ pub async fn steam_restore_session(
         return Ok(SessionState::SignedOut);
     };
 
-    let mut result = install_and_verify(&state, &session.steam_id, &access, Some(&session.refresh_token)).await?;
+    let mut result = install_and_verify(
+        &state,
+        &session.steam_id,
+        &access,
+        Some(&session.refresh_token),
+    )
+    .await?;
     if result == SessionState::SignedOut {
         // The token may still look valid locally (JWT exp in the future) while
         // Steam has revoked it. Force one refresh before asking the user to log
         // in again — this is the "signed in yesterday, revoked today" case.
         if let Ok(Some(refreshed)) = state.steam_session.force_refresh(&account).await {
             access = refreshed;
-            result = install_and_verify(&state, &session.steam_id, &access, Some(&session.refresh_token)).await?;
+            result = install_and_verify(
+                &state,
+                &session.steam_id,
+                &access,
+                Some(&session.refresh_token),
+            )
+            .await?;
         }
     }
     log::info!("[steam-session] restore verify for {account}: {result:?}");
@@ -479,7 +486,10 @@ async fn install_and_verify(
     tokio::time::sleep(COOKIE_APPLY_WAIT).await;
     let _ = state.steam_webview.sync_cookies().await;
     state.workshop.clear_caches();
-    Ok(state.steam_session.verify(steam_id, access_token, refresh_token).await)
+    Ok(state
+        .steam_session
+        .verify(steam_id, access_token, refresh_token)
+        .await)
 }
 
 /// Persist the OAuth tokens that came out of a successful sign-in.

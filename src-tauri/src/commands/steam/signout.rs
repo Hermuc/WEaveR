@@ -36,14 +36,10 @@ pub async fn steam_sign_out(state: AppStateHandle<'_>) -> Result<(), String> {
     // flow would sign straight back in with the saved password on the next
     // launch, which is exactly how a "signed out" app came back authenticated.
     // Any successful sign-in flips this back to `true`.
-    if let Err(e) = state
-        .settings
-        .read()
-        .set(
-            crate::config::KEY_ACCOUNT_AUTO_LOGIN,
-            serde_json::Value::Bool(false),
-        )
-    {
+    if let Err(e) = state.settings.read().set(
+        crate::config::KEY_ACCOUNT_AUTO_LOGIN,
+        serde_json::Value::Bool(false),
+    ) {
         log::warn!("[steam-signout] could not persist auto_login=false: {e}");
     }
 

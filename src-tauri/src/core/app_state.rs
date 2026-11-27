@@ -146,16 +146,14 @@ impl AppState {
                 // running them in sequence added the window's rehydration budget
                 // to every launch even though neither waits for the other.
                 let acct = accounts.preferred_parser_credentials().username;
-                let (profile_ready, token_result) = tokio::join!(
-                    steam_webview.ensure_profile_loaded(),
-                    async {
+                let (profile_ready, token_result) =
+                    tokio::join!(steam_webview.ensure_profile_loaded(), async {
                         if acct.is_empty() {
                             Ok(None)
                         } else {
                             steam_session.ensure_access_token(&acct).await
                         }
-                    }
-                );
+                    });
                 log::info!("[startup] webview profile ready: {profile_ready}");
 
                 // Fast path: a stored OAuth session can rebuild the login

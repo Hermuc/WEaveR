@@ -22,7 +22,6 @@ pub fn is_steam_guard_prompt(line: &str) -> bool {
         || lower.contains("auth code sent to your email")
 }
 
-
 /// Build the `DepotDownloaderMod` command for one download attempt.
 ///
 /// Kept separate from the retry loop so the argument list (and the Windows

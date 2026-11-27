@@ -84,7 +84,11 @@ impl SyncService {
 
     /// Watch the workshop directory so a new wallpaper triggers a rescan
     /// immediately instead of waiting for the poll interval.
-    fn start_watcher(&self, cfg: &we_sync::config::AppConfig, dirty: Arc<std::sync::atomic::AtomicBool>) {
+    fn start_watcher(
+        &self,
+        cfg: &we_sync::config::AppConfig,
+        dirty: Arc<std::sync::atomic::AtomicBool>,
+    ) {
         let Some(dir) = we_sync::discover::effective_workshop_dir(cfg) else {
             return;
         };

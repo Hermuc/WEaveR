@@ -258,10 +258,14 @@ mod tests {
             data: Mutex::new(default_settings()),
         };
         let key = crate::config::KEY_ACCOUNT_AUTO_LOGIN;
-        service.set(key, Value::Bool(false)).expect("set should succeed");
+        service
+            .set(key, Value::Bool(false))
+            .expect("set should succeed");
         assert_eq!(service.get(key), Some(Value::Bool(false)));
         // And it flips back on a successful sign-in.
-        service.set(key, Value::Bool(true)).expect("set should succeed");
+        service
+            .set(key, Value::Bool(true))
+            .expect("set should succeed");
         assert_eq!(service.get(key), Some(Value::Bool(true)));
     }
 }

@@ -40,9 +40,7 @@ impl WorkshopAcf {
         else {
             return Self::default();
         };
-        let path = steamapps
-            .join("workshop")
-            .join("appworkshop_431960.acf");
+        let path = steamapps.join("workshop").join("appworkshop_431960.acf");
         match std::fs::read_to_string(path) {
             Ok(text) => Self::from_text(&text),
             Err(_) => Self::default(),
@@ -158,12 +156,7 @@ fn tokenize(text: &str) -> Vec<Token> {
     out
 }
 
-fn parse_block(
-    tokens: &[Token],
-    index: &mut usize,
-    path: &mut Vec<String>,
-    acf: &mut WorkshopAcf,
-) {
+fn parse_block(tokens: &[Token], index: &mut usize, path: &mut Vec<String>, acf: &mut WorkshopAcf) {
     while *index < tokens.len() {
         match &tokens[*index] {
             Token::Close => {
@@ -196,9 +189,7 @@ fn parse_block(
                 } else if let Some(Token::Str(value)) = tokens.get(*index) {
                     let value = value.clone();
                     *index += 1;
-                    if path.len() == 2
-                        && path[0] == "WorkshopItemDetails"
-                        && key == "subscribedby"
+                    if path.len() == 2 && path[0] == "WorkshopItemDetails" && key == "subscribedby"
                     {
                         if let Some(detail) = acf.details.get_mut(&path[1]) {
                             detail.subscribed_by = Some(value);
@@ -249,7 +240,10 @@ mod tests {
         assert!(acf.installed_ids().contains("100"));
         assert!(acf.installed_ids().contains("200"));
         assert!(!acf.is_residual("100"), "subscribed item is not residual");
-        assert!(acf.is_residual("200"), "installed without subscribedby is residual");
+        assert!(
+            acf.is_residual("200"),
+            "installed without subscribedby is residual"
+        );
     }
 
     #[test]

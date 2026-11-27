@@ -11,7 +11,6 @@ use std::time::Duration;
 use super::manifest::parse_chunk_id;
 use super::{ChunkSpan, ResolvedVideo, CACHE_SPIN_WAIT};
 
-
 /// Hard deadline for one chunk request. 1 MiB on a working CDN is ~1s, but
 /// this network measured healthy hosts taking 15-30s under load; 10s killed
 /// requests that would have succeeded and made playback worse. 25s is the
@@ -43,10 +42,7 @@ impl ResolvedVideo {
             return Err(anyhow::anyhow!("no CDN endpoints"));
         }
 
-        let all_candidates = self
-            .pool
-            .lock()
-            .candidates(std::time::Instant::now());
+        let all_candidates = self.pool.lock().candidates(std::time::Instant::now());
         // Prefer hosts that actually received a CDN token; a token-less host
         // answers 403 (or hangs) and must not consume one of the two slots
         // unless there is nothing else left.
@@ -120,7 +116,10 @@ impl ResolvedVideo {
                         &span.chunk_id,
                         &out,
                     ) {
-                        log::debug!("[video-cache] store failed for chunk {}: {e}", span.chunk_id);
+                        log::debug!(
+                            "[video-cache] store failed for chunk {}: {e}",
+                            span.chunk_id
+                        );
                     }
                     return Ok(out);
                 }

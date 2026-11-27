@@ -68,7 +68,6 @@ pub(super) const COMMUNITY_LOAD_POLL: Duration = Duration::from_millis(400);
 /// Let the window paint before it is shown to the user.
 const WINDOW_SHOW_SETTLE: Duration = Duration::from_millis(600);
 
-
 pub struct SteamWebview {
     app: AppHandle,
     data_dir: PathBuf,
@@ -100,10 +99,7 @@ pub fn install_cookies_for_window(
     session_id: &str,
 ) -> Result<(), String> {
     for domain in ["steamcommunity.com", "steampowered.com"] {
-        for (name, value) in [
-            ("steamLoginSecure", secure),
-            ("sessionid", session_id),
-        ] {
+        for (name, value) in [("steamLoginSecure", secure), ("sessionid", session_id)] {
             let cookie = tauri::webview::Cookie::build((name, value))
                 .domain(domain)
                 .path("/")

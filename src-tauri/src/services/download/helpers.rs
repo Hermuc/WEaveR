@@ -12,7 +12,6 @@ use crate::constants::STEAM_APP_ID;
 
 use super::{DownloadCompleted, Phase, TaskStatus};
 
-
 pub(super) fn build_depot_cmd(
     plugin_path: &std::path::Path,
     pubfileid: &str,
@@ -58,7 +57,6 @@ pub(super) fn build_depot_cmd(
     cmd
 }
 
-
 /// Emit a terminal status for one task and its matching `download://completed`
 /// event.
 ///
@@ -92,4 +90,3 @@ pub(super) fn emit_terminal(
     )
     .ok();
 }
-

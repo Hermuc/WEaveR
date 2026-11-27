@@ -211,7 +211,10 @@ mod tests {
 
     #[test]
     fn author_items_trims_a_trailing_slash() {
-        let filters = WorkshopFilters { page: 1, ..Default::default() };
+        let filters = WorkshopFilters {
+            page: 1,
+            ..Default::default()
+        };
         let url = build_author_items("https://steamcommunity.com/id/me/", &filters);
         assert!(url.starts_with("https://steamcommunity.com/id/me/myworkshopfiles/?"));
         assert!(!url.contains("//myworkshopfiles"));
@@ -219,7 +222,10 @@ mod tests {
 
     #[test]
     fn author_collections_sets_the_section() {
-        let filters = WorkshopFilters { page: 2, ..Default::default() };
+        let filters = WorkshopFilters {
+            page: 2,
+            ..Default::default()
+        };
         let url = build_author_collections("https://steamcommunity.com/id/x", &filters);
         assert!(url.contains("section=collections"));
         assert!(url.contains("p=2"));
@@ -235,7 +241,10 @@ mod tests {
 
     #[test]
     fn page_zero_is_clamped_to_one() {
-        let filters = WorkshopFilters { page: 0, ..Default::default() };
+        let filters = WorkshopFilters {
+            page: 0,
+            ..Default::default()
+        };
         let url = build_browse(&filters);
         assert!(url.contains("p=1"));
         assert!(!url.contains("p=0"));

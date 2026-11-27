@@ -10,10 +10,8 @@ use steamroom::client::{LoggedIn, SteamClient};
 use steamroom::depot::{AppId, DepotId, DepotKey, ManifestId};
 
 use super::{
-    CdnEndpoint, ResolvedVideo, VideoStreamInfo, MANIFEST_DOWNLOAD_TIMEOUT,
-    MANIFEST_RETRY_BACKOFF,
+    CdnEndpoint, ResolvedVideo, VideoStreamInfo, MANIFEST_DOWNLOAD_TIMEOUT, MANIFEST_RETRY_BACKOFF,
 };
-
 
 /// Fetch CDN auth tokens for every advertised host, in parallel.
 ///

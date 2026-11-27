@@ -10,13 +10,32 @@ use we_sync::engine::Event;
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SyncEventDto {
-    Log { message: String },
-    Device { device: Option<DeviceDto> },
-    Busy { value: bool },
-    Progress { name: String, done: u64, total: u64 },
-    Stats { uploaded: u64, skipped: u64, failed: u64, filtered: u64 },
-    Queue { count: usize },
-    TransferPaused { value: bool },
+    Log {
+        message: String,
+    },
+    Device {
+        device: Option<DeviceDto>,
+    },
+    Busy {
+        value: bool,
+    },
+    Progress {
+        name: String,
+        done: u64,
+        total: u64,
+    },
+    Stats {
+        uploaded: u64,
+        skipped: u64,
+        failed: u64,
+        filtered: u64,
+    },
+    Queue {
+        count: usize,
+    },
+    TransferPaused {
+        value: bool,
+    },
 }
 
 #[derive(Debug, Clone, Serialize)]

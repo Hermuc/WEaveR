@@ -230,5 +230,3 @@ mod tests {
         assert!(script.contains("'#WE_PAGE:'"));
     }
 }
-
-

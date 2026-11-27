@@ -3,5 +3,5 @@ pub mod archive;
 pub mod constants;
 pub mod logger;
 pub mod platform;
-pub mod shutdown;
 pub mod runtime;
+pub mod shutdown;

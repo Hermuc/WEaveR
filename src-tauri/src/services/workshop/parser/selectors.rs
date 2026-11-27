@@ -39,9 +39,18 @@ regex!(SSR_QUERIES, "queries\"\\s*:\\s*\"((?:\\\\.|[^\"\\\\])*)\"");
 
 // ── pagination ───────────────────────────────────────────────────────────
 regex!(PAGE_ELLIPSIS_LAST, "<div>\\.\\.\\.</div><div[^>]*class=\"[^\"]*Panel[^\"]*\"[^>]*tabindex=\"0\"[^>]*role=\"button\"[^>]*>\\s*([\\d,]+)\\s*</div>");
-regex!(PAGE_TOTAL_SHORT, "(?:Showing)\\s+\\d+[\\s\\-–]\\d+\\s+(?:of)\\s+([\\d,.\\s]+)");
-selector!(PAGE_CONTROLS, ".workshopBrowsePagingControls a, .workshopBrowsePagingControls span");
-regex!(PAGE_SHOWING, "(?:Showing)\\s+(\\d+)[\\s\\-–](\\d+)\\s+(?:of)\\s+([\\d,.\\s]+)");
+regex!(
+    PAGE_TOTAL_SHORT,
+    "(?:Showing)\\s+\\d+[\\s\\-–]\\d+\\s+(?:of)\\s+([\\d,.\\s]+)"
+);
+selector!(
+    PAGE_CONTROLS,
+    ".workshopBrowsePagingControls a, .workshopBrowsePagingControls span"
+);
+regex!(
+    PAGE_SHOWING,
+    "(?:Showing)\\s+(\\d+)[\\s\\-–](\\d+)\\s+(?:of)\\s+([\\d,.\\s]+)"
+);
 regex!(PAGE_LINK, "class=\"pagelink\"[^>]*>\\s*(\\d+)\\s*<");
 regex!(PAGE_CURRENT, "class=\"page_current\"[^>]*>\\s*(\\d+)\\s*<");
 

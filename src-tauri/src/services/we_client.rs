@@ -59,7 +59,6 @@ pub struct WallpaperEngineClient {
     installed_cache: std::sync::Mutex<Option<Vec<InstalledWallpaper>>>,
 }
 
-
 pub(super) fn parse_project(folder: &Path, pubfileid: &str) -> InstalledWallpaper {
     let project_json_path = folder.join("project.json");
     let mut title = pubfileid.to_string();

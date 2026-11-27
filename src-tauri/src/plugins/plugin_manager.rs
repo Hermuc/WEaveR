@@ -218,7 +218,6 @@ async fn download_and_extract_plugin(
     Ok(())
 }
 
-
 fn extract_rar(
     rar_path: &std::path::Path,
     target_dir: &std::path::Path,

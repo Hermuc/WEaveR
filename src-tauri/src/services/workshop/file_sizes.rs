@@ -92,7 +92,11 @@ pub async fn fetch_file_sizes(client: &Client, ids: &[String]) -> HashMap<String
             if detail.result != 1 {
                 continue;
             }
-            let Some(size) = detail.file_size.as_deref().and_then(|s| s.parse::<u64>().ok()) else {
+            let Some(size) = detail
+                .file_size
+                .as_deref()
+                .and_then(|s| s.parse::<u64>().ok())
+            else {
                 continue;
             };
             sizes.insert(detail.publishedfileid, size);

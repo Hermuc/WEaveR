@@ -34,10 +34,7 @@ pub fn sync_pause(state: State<'_, Arc<SyncService>>, paused: bool) -> Result<()
 }
 
 #[tauri::command]
-pub fn sync_transfer_pause(
-    state: State<'_, Arc<SyncService>>,
-    paused: bool,
-) -> Result<(), String> {
+pub fn sync_transfer_pause(state: State<'_, Arc<SyncService>>, paused: bool) -> Result<(), String> {
     state.set_transfer_paused(paused)
 }
 

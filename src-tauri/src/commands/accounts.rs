@@ -289,7 +289,6 @@ pub async fn accounts_verify_custom(
     Ok(())
 }
 
-
 /// Whether the accumulated partial line is a Steam Guard prompt that is
 /// blocking on console input.
 ///

@@ -12,7 +12,6 @@ use super::steam_dirs::{steam_install_dirs, steam_library_folders};
 
 use super::WallpaperEngineClient;
 
-
 impl WallpaperEngineClient {
     pub fn new(directory: Option<PathBuf>) -> Self {
         Self {
@@ -157,5 +156,4 @@ impl WallpaperEngineClient {
         }
         None
     }
-
 }

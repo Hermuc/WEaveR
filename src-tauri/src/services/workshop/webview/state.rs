@@ -13,7 +13,6 @@ use std::time::Duration;
 use super::{SteamWebview, LABEL};
 
 impl SteamWebview {
-
     /// True if the webview believes it's logged in (i.e. has a
     /// `steamLoginSecure` cookie).
     ///

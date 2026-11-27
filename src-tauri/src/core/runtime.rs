@@ -261,7 +261,11 @@ mod tests {
     #[test]
     fn a_dir_with_the_dotnet_binary_is_valid() {
         let dir = tempfile::tempdir().unwrap();
-        let exe = if cfg!(windows) { "dotnet.exe" } else { "dotnet" };
+        let exe = if cfg!(windows) {
+            "dotnet.exe"
+        } else {
+            "dotnet"
+        };
         std::fs::write(dir.path().join(exe), b"x").unwrap();
         assert!(is_portable_runtime_valid(dir.path()));
     }

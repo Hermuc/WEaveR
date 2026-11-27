@@ -233,10 +233,16 @@ mod tests {
     fn classify_http_result_covers_valid_rejected_and_unavailable() {
         assert_eq!(classify_http_result(200, None), RefreshVerify::Valid);
         assert_eq!(classify_http_result(200, Some("1")), RefreshVerify::Valid);
-        assert_eq!(classify_http_result(403, Some("15")), RefreshVerify::Rejected);
+        assert_eq!(
+            classify_http_result(403, Some("15")),
+            RefreshVerify::Rejected
+        );
         assert_eq!(classify_http_result(401, None), RefreshVerify::Rejected);
         assert_eq!(classify_http_result(500, None), RefreshVerify::Unavailable);
-        assert_eq!(classify_http_result(200, Some("2")), RefreshVerify::Unavailable);
+        assert_eq!(
+            classify_http_result(200, Some("2")),
+            RefreshVerify::Unavailable
+        );
     }
 
     #[test]

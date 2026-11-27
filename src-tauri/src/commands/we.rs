@@ -460,8 +460,8 @@ fn remove_folder_to_trash(folder: &std::path::Path) -> anyhow::Result<()> {
     use windows::core::PCWSTR;
     use windows::Win32::Foundation::{BOOL, HWND};
     use windows::Win32::UI::Shell::{
-        SHFileOperationW, SHFILEOPSTRUCTW, FOF_ALLOWUNDO, FOF_NOCONFIRMATION, FOF_NOERRORUI,
-        FOF_SILENT, FO_DELETE,
+        SHFileOperationW, FOF_ALLOWUNDO, FOF_NOCONFIRMATION, FOF_NOERRORUI, FOF_SILENT, FO_DELETE,
+        SHFILEOPSTRUCTW,
     };
 
     if !folder.exists() {
@@ -483,7 +483,9 @@ fn remove_folder_to_trash(folder: &std::path::Path) -> anyhow::Result<()> {
     };
     let result = unsafe { SHFileOperationW(&mut operation) };
     if result != 0 {
-        return Err(anyhow::anyhow!("SHFileOperationW failed with code {result}"));
+        return Err(anyhow::anyhow!(
+            "SHFileOperationW failed with code {result}"
+        ));
     }
     if operation.fAnyOperationsAborted.as_bool() {
         return Err(anyhow::anyhow!("recycle operation was aborted"));

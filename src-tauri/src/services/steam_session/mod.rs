@@ -278,10 +278,7 @@ fn cooldown_active(
     now: std::time::Instant,
 ) -> bool {
     match failure {
-        Some(f) => {
-            f.account == account
-                && now.duration_since(f.at) < REFRESH_FAILURE_COOLDOWN
-        }
+        Some(f) => f.account == account && now.duration_since(f.at) < REFRESH_FAILURE_COOLDOWN,
         None => false,
     }
 }
