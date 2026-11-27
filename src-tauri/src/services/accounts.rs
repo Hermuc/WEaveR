@@ -16,6 +16,8 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
+use crate::errors::AppError;
+
 pub mod user_accounts;
 
 pub use user_accounts::StoredSteamSession;
@@ -87,12 +89,12 @@ impl AccountManager {
         all.get(index).cloned().unwrap_or_else(|| all[0].clone())
     }
 
-    pub fn add_user_account(&self, username: &str, password: &str) -> Result<(), String> {
+    pub fn add_user_account(&self, username: &str, password: &str) -> Result<(), AppError> {
         self.user_store.add(username, password)
     }
 
     /// Persist a Steam OAuth session for one account.
-    pub fn set_session(&self, username: &str, session: StoredSteamSession) -> Result<(), String> {
+    pub fn set_session(&self, username: &str, session: StoredSteamSession) -> Result<(), AppError> {
         self.user_store.set_session(username, session)
     }
 
@@ -102,15 +104,15 @@ impl AccountManager {
     }
 
     /// Forget the saved OAuth session for one account (keeps username/password).
-    pub fn clear_session(&self, username: &str) -> Result<(), String> {
+    pub fn clear_session(&self, username: &str) -> Result<(), AppError> {
         self.user_store.clear_session(username)
     }
 
-    pub fn remove_user_account(&self, username: &str) -> Result<(), String> {
+    pub fn remove_user_account(&self, username: &str) -> Result<(), AppError> {
         self.user_store.remove(username)
     }
 
-    pub fn clear_user_accounts(&self) -> Result<(), String> {
+    pub fn clear_user_accounts(&self) -> Result<(), AppError> {
         self.user_store.clear()
     }
 

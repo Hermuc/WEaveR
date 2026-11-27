@@ -21,6 +21,8 @@ use rand::Rng;
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 
+use crate::errors::AppError;
+
 const SALT: &[u8] = b"WEave_Salt_2026_v1";
 const ITERATIONS: u32 = 100_000;
 
@@ -110,9 +112,9 @@ impl UserAccountsStore {
     /// password on disk could never be refreshed — every later auto-login failed
     /// with the old credentials, and the UI only ever showed "login failed" with
     /// no hint that the stored password was the problem.
-    pub fn add(&self, username: &str, password: &str) -> Result<(), String> {
+    pub fn add(&self, username: &str, password: &str) -> Result<(), AppError> {
         if username.is_empty() || password.is_empty() {
-            return Err("Username and password are required".into());
+            return Err(AppError::validation("Username and password are required"));
         }
         let mut guard = self.accounts.lock();
         if let Some(existing) = guard.iter_mut().find(|a| a.username == username) {
@@ -131,10 +133,10 @@ impl UserAccountsStore {
     ///
     /// Called right after a successful sign-in so the next launch can skip the
     /// login page entirely.
-    pub fn set_session(&self, username: &str, session: StoredSteamSession) -> Result<(), String> {
+    pub fn set_session(&self, username: &str, session: StoredSteamSession) -> Result<(), AppError> {
         let mut guard = self.accounts.lock();
         let Some(entry) = guard.iter_mut().find(|a| a.username == username) else {
-            return Err("Account not found".into());
+            return Err(AppError::not_found("Account not found"));
         };
         entry.session = Some(session);
         save_accounts(&self.file_path, &self.cipher, &guard)
@@ -156,26 +158,26 @@ impl UserAccountsStore {
     /// tokens in `user_accounts.enc` are what let the next launch rebuild the
     /// `steamLoginSecure` cookie without the user, so a sign-out that left them
     /// behind would silently sign the user back in on the next start.
-    pub fn clear_session(&self, username: &str) -> Result<(), String> {
+    pub fn clear_session(&self, username: &str) -> Result<(), AppError> {
         let mut guard = self.accounts.lock();
         let Some(entry) = guard.iter_mut().find(|a| a.username == username) else {
-            return Err("Account not found".into());
+            return Err(AppError::not_found("Account not found"));
         };
         entry.session = None;
         save_accounts(&self.file_path, &self.cipher, &guard)
     }
 
-    pub fn remove(&self, username: &str) -> Result<(), String> {
+    pub fn remove(&self, username: &str) -> Result<(), AppError> {
         let mut guard = self.accounts.lock();
         let before = guard.len();
         guard.retain(|a| a.username != username);
         if guard.len() == before {
-            return Err("Account not found".into());
+            return Err(AppError::not_found("Account not found"));
         }
         save_accounts(&self.file_path, &self.cipher, &guard)
     }
 
-    pub fn clear(&self) -> Result<(), String> {
+    pub fn clear(&self) -> Result<(), AppError> {
         let mut guard = self.accounts.lock();
         guard.clear();
         save_accounts(&self.file_path, &self.cipher, &guard)
@@ -238,21 +240,23 @@ fn save_accounts(
     path: &std::path::Path,
     cipher: &Aes256Gcm,
     accounts: &[StoredUserAccount],
-) -> Result<(), String> {
+) -> Result<(), AppError> {
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        std::fs::create_dir_all(parent)
+            .map_err(|e| AppError::file_system(format!("create accounts dir: {e}")))?;
     }
-    let json = serde_json::to_vec(accounts).map_err(|e| e.to_string())?;
+    let json = serde_json::to_vec(accounts)
+        .map_err(|e| AppError::internal(format!("encode accounts: {e}")))?;
     let mut nonce_bytes = [0u8; 12];
     rand::rng().fill_bytes(&mut nonce_bytes);
     let nonce = Nonce::from_slice(&nonce_bytes);
     let ct = cipher
         .encrypt(nonce, json.as_ref())
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| AppError::internal(format!("encrypt accounts: {e}")))?;
     let mut out = Vec::with_capacity(12 + ct.len());
     out.extend_from_slice(&nonce_bytes);
     out.extend_from_slice(&ct);
-    std::fs::write(path, out).map_err(|e| e.to_string())
+    std::fs::write(path, out).map_err(|e| AppError::file_system(format!("write accounts: {e}")))
 }
 
 #[cfg(test)]

@@ -62,7 +62,10 @@ pub async fn accounts_set_custom(
 /// Remove a single user account by username.
 #[command]
 pub fn accounts_remove_custom(state: AppStateHandle<'_>, username: String) -> Result<(), String> {
-    state.accounts.remove_user_account(username.trim())
+    state
+        .accounts
+        .remove_user_account(username.trim())
+        .map_err(String::from)
 }
 
 /// List the usernames of user-added accounts (the SettingsDialog shows
